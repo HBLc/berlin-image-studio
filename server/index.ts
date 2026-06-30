@@ -1,7 +1,7 @@
 import cors from 'cors'
 import dotenv from 'dotenv'
 import express from 'express'
-import OpenAI, { toFile } from 'openai'
+import OpenAI from 'openai'
 import type { ComposeRequest, GenerateImageRequest, HealthResponse, XhsPage, XhsProject } from '../src/types'
 import { createMockImage, createMockProject } from './mock'
 import { buildContentPrompt, buildImagePrompt } from './prompts'
@@ -133,15 +133,144 @@ function dataUrlToFile(dataUrl: string) {
   const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/)
   if (!match) throw new Error('Invalid reference image data URL')
   const mime = match[1]
-  const ext = mime.split('/')[1] || 'png'
+  const ext = mime.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
   const buffer = Buffer.from(match[2], 'base64')
-  return toFile(buffer, `reference.${ext}`, { type: mime })
+  return {
+    blob: new Blob([buffer], { type: mime }),
+    filename: `reference.${ext}`,
+  }
 }
 
 function getImageMime(format: string): string {
   if (format === 'jpeg') return 'image/jpeg'
   if (format === 'webp') return 'image/webp'
   return 'image/png'
+}
+
+function buildApiUrl(path: string): string {
+  return `${apiBaseUrl}/${path.replace(/^\/+/, '')}`
+}
+
+async function getApiErrorMessage(response: Response): Promise<string> {
+  const cloned = response.clone()
+  try {
+    const payload = await response.json() as {
+      error?: { message?: string } | string
+      detail?: unknown
+      message?: string
+    }
+    if (typeof payload.error === 'object' && payload.error?.message) return payload.error.message
+    if (typeof payload.error === 'string') return payload.error
+    if (typeof payload.message === 'string') return payload.message
+    if (typeof payload.detail === 'string') return payload.detail
+    if (Array.isArray(payload.detail)) return payload.detail.map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join('\n')
+  } catch {
+    try {
+      const text = await cloned.text()
+      if (text.trim()) return text
+    } catch {
+      // ignore
+    }
+  }
+  return `HTTP ${response.status}`
+}
+
+function normalizeBase64Image(value: string, fallbackMime: string): string {
+  return value.startsWith('data:') ? value : `data:${fallbackMime};base64,${value}`
+}
+
+async function fetchImageAsDataUrl(url: string, fallbackMime: string): Promise<string> {
+  if (url.startsWith('data:')) return url
+  const response = await fetch(url, { cache: 'no-store' })
+  if (!response.ok) throw new Error(`图片 URL 下载失败：HTTP ${response.status}`)
+  const contentType = response.headers.get('content-type') || fallbackMime
+  const bytes = Buffer.from(await response.arrayBuffer())
+  return `data:${contentType};base64,${bytes.toString('base64')}`
+}
+
+async function parseImageApiResponse(response: Response, mime: string): Promise<string> {
+  if (!response.ok) throw new Error(await getApiErrorMessage(response))
+
+  const payload = await response.json() as {
+    data?: Array<{ b64_json?: string; url?: string }>
+    b64_json?: string
+    url?: string
+  } | Array<{ b64_json?: string; url?: string }>
+
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload.data)
+      ? payload.data
+      : [payload]
+
+  for (const item of items) {
+    if (item?.b64_json) return normalizeBase64Image(item.b64_json, mime)
+    if (item?.url) return fetchImageAsDataUrl(item.url, mime)
+  }
+
+  throw new Error(`Image API did not return recognizable image data: ${JSON.stringify(payload).slice(0, 1000)}`)
+}
+
+async function callImageApi(args: {
+  prompt: string
+  config: XhsProject['config']
+  referenceImage?: string
+}): Promise<{ image: string; mime: string }> {
+  const { prompt, config, referenceImage } = args
+  const mime = getImageMime(config.outputFormat)
+  const headers = {
+    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.OPENAI_IMAGE_TIMEOUT_SECONDS || 180) * 1000)
+
+  try {
+    if (referenceImage) {
+      const formData = new FormData()
+      formData.append('model', imageModel)
+      formData.append('prompt', prompt)
+      formData.append('size', config.size)
+      formData.append('quality', config.quality)
+      formData.append('output_format', config.outputFormat)
+      formData.append('moderation', config.moderation)
+
+      const file = dataUrlToFile(referenceImage)
+      formData.append('image[]', file.blob, file.filename)
+
+      const response = await fetch(buildApiUrl('images/edits'), {
+        method: 'POST',
+        headers,
+        body: formData,
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      return { image: await parseImageApiResponse(response, mime), mime }
+    }
+
+    const body = {
+      model: imageModel,
+      prompt,
+      size: config.size,
+      quality: config.quality,
+      output_format: config.outputFormat,
+      moderation: config.moderation,
+    }
+
+    const response = await fetch(buildApiUrl('images/generations'), {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+    return { image: await parseImageApiResponse(response, mime), mime }
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 app.get('/api/health', (_req, res) => {
@@ -210,7 +339,6 @@ app.post('/api/image', async (req, res, next) => {
       return
     }
 
-    const client = getClient()
     const { page, project } = request
     const config = project.config
     const prompt = page.imagePrompt || buildImagePrompt({
@@ -222,29 +350,15 @@ app.post('/api/image', async (req, res, next) => {
       hasReference: Boolean(request.referenceImage),
     })
 
-    const common = {
-      model: imageModel,
+    const result = await callImageApi({
       prompt,
-      size: config.size,
-      quality: config.quality,
-      output_format: config.outputFormat,
-      moderation: config.moderation,
-    }
+      config,
+      referenceImage: request.referenceImage,
+    })
 
-    const response = request.referenceImage
-      ? await client.images.edit({
-        ...common,
-        image: [await dataUrlToFile(request.referenceImage)],
-      } as never)
-      : await client.images.generate(common as never)
-
-    const b64 = response.data?.[0]?.b64_json
-    if (!b64) throw new Error('Image API did not return base64 image data')
-
-    const mime = getImageMime(config.outputFormat)
     res.json({
-      image: `data:${mime};base64,${b64}`,
-      mime,
+      image: result.image,
+      mime: result.mime,
       model: imageModel,
     })
   } catch (error) {
