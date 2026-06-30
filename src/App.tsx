@@ -5,25 +5,36 @@ import {
   Check,
   Copy,
   Download,
+  Eye,
+  EyeOff,
   History,
   Image as ImageIcon,
   Loader2,
   RefreshCw,
   Save,
+  Settings,
   Sparkles,
   Trash2,
   WandSparkles,
+  X,
 } from 'lucide-react'
-import { composeProject, generateImage, getHealth, suggestSettings } from './api'
+import { composeProject, generateImage, getEnvConfig, getHealth, saveEnvConfig, suggestSettings } from './api'
 import { exportProjectZip, toSavedProject } from './exportProject'
 import { clearHistory, loadHistory, rememberProject, saveHistory } from './storage'
-import type { Field, HealthResponse, SavedProject, StudioConfig, VisualStyle, XhsPage, XhsProject } from './types'
+import type { EnvConfig, Field, HealthResponse, SavedProject, StudioConfig, VisualStyle, XhsPage, XhsProject } from './types'
 
 const fields: Field[] = ['生活方式', '美妆护肤', '职场效率', '学习成长', '旅行探店', '美食烘焙', '运动健康', '母婴家庭', '家居收纳', '数码工具']
 const styles: VisualStyle[] = ['清爽实用', '杂志质感', '手账拼贴', '专业干货', '温暖日常', '科技极简']
 const XHS_IMAGE_SIZE = '1200x1600'
 const XHS_IMAGE_QUALITY = 'medium'
 const XHS_IMAGE_FORMAT = 'png'
+const emptyEnvConfig: EnvConfig = {
+  openaiApiKey: '',
+  openaiBaseUrl: 'https://api.openai.com/v1',
+  openaiTextModel: 'gpt-5.5',
+  openaiImageModel: 'gpt-image-2',
+  openaiImageTimeoutSeconds: '180',
+}
 
 const defaultConfig: StudioConfig = {
   field: '生活方式',
@@ -235,9 +246,23 @@ export default function App() {
   const [history, setHistory] = useState<SavedProject[]>([])
   const [busy, setBusy] = useState<BusyState>(null)
   const [error, setError] = useState('')
+  const [showConfig, setShowConfig] = useState(false)
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [envConfig, setEnvConfig] = useState<EnvConfig>(emptyEnvConfig)
+  const [envBusy, setEnvBusy] = useState(false)
+  const [envError, setEnvError] = useState('')
+  const [envMessage, setEnvMessage] = useState('')
 
   useEffect(() => {
-    void getHealth().then(setHealth).catch(() => {
+    void refreshHealth()
+    void loadEnvConfig()
+    setHistory(loadHistory())
+  }, [])
+
+  async function refreshHealth() {
+    try {
+      setHealth(await getHealth())
+    } catch {
       setHealth({
         ok: false,
         hasApiKey: false,
@@ -245,9 +270,16 @@ export default function App() {
         imageModel: 'gpt-image-2',
         apiBaseUrl: 'https://api.openai.com/v1',
       } as HealthResponse)
-    })
-    setHistory(loadHistory())
-  }, [])
+    }
+  }
+
+  async function loadEnvConfig() {
+    try {
+      setEnvConfig(await getEnvConfig())
+    } catch (err) {
+      setEnvError(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   useEffect(() => {
     if (!selectedPageId && project?.pages[0]) setSelectedPageId(project.pages[0].id)
@@ -284,6 +316,22 @@ export default function App() {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(null)
+    }
+  }
+
+  async function saveRuntimeConfig() {
+    setEnvBusy(true)
+    setEnvError('')
+    setEnvMessage('')
+    try {
+      const next = await saveEnvConfig(envConfig)
+      setEnvConfig(next)
+      setEnvMessage('已保存')
+      await refreshHealth()
+    } catch (err) {
+      setEnvError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setEnvBusy(false)
     }
   }
 
@@ -479,8 +527,95 @@ export default function App() {
           </span>
           <span className="status-pill">{health?.imageModel ?? 'gpt-image-2'}</span>
           <span className="status-pill api-url">{health?.apiBaseUrl ?? 'https://api.openai.com/v1'}</span>
+          <button className="config-button" type="button" onClick={() => setShowConfig(true)}>
+            <Settings size={17} />
+            配置
+          </button>
         </div>
       </header>
+
+      {showConfig && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowConfig(false)}>
+          <section className="config-modal" aria-label=".env 配置" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading-row">
+              <div className="panel-title">
+                <Settings size={20} aria-hidden="true" />
+                <h2>配置</h2>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setShowConfig(false)} aria-label="关闭配置">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="config-form">
+              <label className="field-block">
+                <span>API Key</span>
+                <div className="secret-field">
+                  <input
+                    type={showApiKey ? 'text' : 'password'}
+                    value={envConfig.openaiApiKey}
+                    onChange={(event) => setEnvConfig({ ...envConfig, openaiApiKey: event.target.value })}
+                    autoComplete="off"
+                  />
+                  <button type="button" onClick={() => setShowApiKey((value) => !value)} aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}>
+                    {showApiKey ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </button>
+                </div>
+              </label>
+
+              <label className="field-block">
+                <span>API URL</span>
+                <input
+                  value={envConfig.openaiBaseUrl}
+                  onChange={(event) => setEnvConfig({ ...envConfig, openaiBaseUrl: event.target.value })}
+                  placeholder="https://api.openai.com/v1"
+                />
+              </label>
+
+              <div className="config-grid">
+                <label className="field-block">
+                  <span>文案模型</span>
+                  <input
+                    value={envConfig.openaiTextModel}
+                    onChange={(event) => setEnvConfig({ ...envConfig, openaiTextModel: event.target.value })}
+                  />
+                </label>
+                <label className="field-block">
+                  <span>图片模型</span>
+                  <input
+                    value={envConfig.openaiImageModel}
+                    onChange={(event) => setEnvConfig({ ...envConfig, openaiImageModel: event.target.value })}
+                  />
+                </label>
+              </div>
+
+              <label className="field-block">
+                <span>图片超时秒数</span>
+                <input
+                  type="number"
+                  min={30}
+                  value={envConfig.openaiImageTimeoutSeconds}
+                  onChange={(event) => setEnvConfig({ ...envConfig, openaiImageTimeoutSeconds: event.target.value })}
+                />
+              </label>
+
+              {envError && <div className="error-box" role="alert">{envError}</div>}
+              {envMessage && <div className="success-box" role="status">{envMessage}</div>}
+
+              <div className="button-row">
+                <button className="secondary-button" type="button" onClick={loadEnvConfig} disabled={envBusy}>
+                  <RefreshCw size={18} />
+                  重新读取
+                </button>
+                <button className="primary-button" type="button" onClick={saveRuntimeConfig} disabled={envBusy}>
+                  {envBusy ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+                  保存配置
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
 
       <main className="workspace">
         <section className="panel composer" aria-label="生成设置">

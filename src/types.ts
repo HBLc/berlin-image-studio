@@ -100,6 +100,18 @@ export interface HealthResponse {
   apiBaseUrl: string
 }
 
+export interface EnvConfig {
+  openaiApiKey: string
+  openaiBaseUrl: string
+  openaiTextModel: string
+  openaiImageModel: string
+  openaiImageTimeoutSeconds: string
+}
+
+export type EnvConfigResponse = EnvConfig
+
+export type SaveEnvConfigRequest = EnvConfig
+
 export interface SavedProject extends XhsProject {
   images: Record<string, string>
 }

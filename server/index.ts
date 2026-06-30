@@ -1,20 +1,18 @@
 import cors from 'cors'
 import dotenv from 'dotenv'
 import express from 'express'
+import { readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import OpenAI from 'openai'
-import type { ComposeRequest, Field, GenerateImageRequest, HealthResponse, SuggestSettingsRequest, SuggestSettingsResponse, VisualStyle, XhsPage, XhsProject } from '../src/types'
+import type { ComposeRequest, EnvConfigResponse, Field, GenerateImageRequest, HealthResponse, SaveEnvConfigRequest, SuggestSettingsRequest, SuggestSettingsResponse, VisualStyle, XhsPage, XhsProject } from '../src/types'
 import { createMockImage, createMockProject } from './mock'
 import { buildContentPrompt, buildImagePrompt, buildSettingsPrompt } from './prompts'
 
 dotenv.config()
 
 const app = express()
+const envPath = path.resolve(process.cwd(), '.env')
 const port = Number(process.env.PORT || 8787)
-const textModel = process.env.OPENAI_TEXT_MODEL || 'gpt-5.5'
-const imageModel = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2'
-const apiBaseUrl = (process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || 'https://api.openai.com/v1')
-  .trim()
-  .replace(/\/+$/, '')
 const fields: Field[] = ['生活方式', '美妆护肤', '职场效率', '学习成长', '旅行探店', '美食烘焙', '运动健康', '母婴家庭', '家居收纳', '数码工具']
 const visualStyles: VisualStyle[] = ['清爽实用', '杂志质感', '手账拼贴', '专业干货', '温暖日常', '科技极简']
 
@@ -25,14 +23,111 @@ function hasApiKey(): boolean {
   return Boolean(process.env.OPENAI_API_KEY?.trim())
 }
 
+function getTextModel(): string {
+  return process.env.OPENAI_TEXT_MODEL?.trim() || 'gpt-5.5'
+}
+
+function getImageModel(): string {
+  return process.env.OPENAI_IMAGE_MODEL?.trim() || 'gpt-image-2'
+}
+
+function getApiBaseUrl(): string {
+  return (process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || 'https://api.openai.com/v1')
+    .trim()
+    .replace(/\/+$/, '')
+}
+
 function getClient(): OpenAI {
   if (!hasApiKey()) {
     throw new Error('OPENAI_API_KEY is not configured')
   }
   return new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
-    baseURL: apiBaseUrl,
+    baseURL: getApiBaseUrl(),
   })
+}
+
+function getEnvConfig(): EnvConfigResponse {
+  return {
+    openaiApiKey: process.env.OPENAI_API_KEY?.trim() ?? '',
+    openaiBaseUrl: getApiBaseUrl(),
+    openaiTextModel: getTextModel(),
+    openaiImageModel: getImageModel(),
+    openaiImageTimeoutSeconds: process.env.OPENAI_IMAGE_TIMEOUT_SECONDS?.trim() || '180',
+  }
+}
+
+function cleanEnvValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function quoteEnvValue(value: string): string {
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(value)) return value
+  return JSON.stringify(value)
+}
+
+async function readEnvText(): Promise<string> {
+  try {
+    return await readFile(envPath, 'utf8')
+  } catch (error) {
+    const err = error as { code?: string }
+    if (err.code === 'ENOENT') return ''
+    throw error
+  }
+}
+
+async function writeEnvValues(values: Record<string, string>): Promise<void> {
+  const current = await readEnvText()
+  const keys = new Set(Object.keys(values))
+  const seen = new Set<string>()
+  const nextLines: string[] = []
+
+  for (const line of current.split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/)
+    const key = match?.[1]
+    if (key && keys.has(key)) {
+      seen.add(key)
+      if (values[key]) nextLines.push(`${key}=${quoteEnvValue(values[key])}`)
+      continue
+    }
+    if (line.trim() || nextLines.length) nextLines.push(line)
+  }
+
+  for (const [key, value] of Object.entries(values)) {
+    if (!seen.has(key) && value) nextLines.push(`${key}=${quoteEnvValue(value)}`)
+  }
+
+  const output = `${nextLines.join('\n').replace(/\n+$/, '')}\n`
+  await writeFile(envPath, output, 'utf8')
+
+  for (const [key, value] of Object.entries(values)) {
+    if (value) process.env[key] = value
+    else delete process.env[key]
+  }
+}
+
+function normalizeEnvConfig(request: SaveEnvConfigRequest): Record<string, string> {
+  const openaiApiKey = cleanEnvValue(request.openaiApiKey)
+  const openaiBaseUrl = cleanEnvValue(request.openaiBaseUrl).replace(/\/+$/, '')
+  const openaiTextModel = cleanEnvValue(request.openaiTextModel) || 'gpt-5.5'
+  const openaiImageModel = cleanEnvValue(request.openaiImageModel) || 'gpt-image-2'
+  const openaiImageTimeoutSeconds = cleanEnvValue(request.openaiImageTimeoutSeconds) || '180'
+
+  if (openaiBaseUrl && !/^https?:\/\/\S+$/i.test(openaiBaseUrl)) {
+    throw new Error('API URL 必须以 http:// 或 https:// 开头')
+  }
+  if (!/^\d+$/.test(openaiImageTimeoutSeconds) || Number(openaiImageTimeoutSeconds) < 30) {
+    throw new Error('图片超时时间不能小于 30 秒')
+  }
+
+  return {
+    OPENAI_API_KEY: openaiApiKey,
+    OPENAI_BASE_URL: openaiBaseUrl,
+    OPENAI_API_URL: '',
+    OPENAI_TEXT_MODEL: openaiTextModel,
+    OPENAI_IMAGE_MODEL: openaiImageModel,
+    OPENAI_IMAGE_TIMEOUT_SECONDS: openaiImageTimeoutSeconds,
+  }
 }
 
 function readOutputText(response: unknown): string {
@@ -201,7 +296,7 @@ function getImageMime(format: string): string {
 }
 
 function buildApiUrl(path: string): string {
-  return `${apiBaseUrl}/${path.replace(/^\/+/, '')}`
+  return `${getApiBaseUrl()}/${path.replace(/^\/+/, '')}`
 }
 
 async function getApiErrorMessage(response: Response): Promise<string> {
@@ -271,6 +366,7 @@ async function callImageApi(args: {
 }): Promise<{ image: string; mime: string }> {
   const { prompt, config, referenceImage } = args
   const mime = getImageMime(config.outputFormat)
+  const imageModel = getImageModel()
   const headers = {
     Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
   }
@@ -330,11 +426,24 @@ app.get('/api/health', (_req, res) => {
   const body: HealthResponse = {
     ok: true,
     hasApiKey: hasApiKey(),
-    textModel,
-    imageModel,
-    apiBaseUrl,
+    textModel: getTextModel(),
+    imageModel: getImageModel(),
+    apiBaseUrl: getApiBaseUrl(),
   }
   res.json(body)
+})
+
+app.get('/api/env-config', (_req, res) => {
+  res.json(getEnvConfig())
+})
+
+app.post('/api/env-config', async (req, res, next) => {
+  try {
+    await writeEnvValues(normalizeEnvConfig(req.body as SaveEnvConfigRequest))
+    res.json(getEnvConfig())
+  } catch (error) {
+    next(error)
+  }
 })
 
 app.post('/api/suggest-settings', async (req, res, next) => {
@@ -353,7 +462,7 @@ app.post('/api/suggest-settings', async (req, res, next) => {
 
     const client = getClient()
     const response = await client.responses.create({
-      model: textModel,
+      model: getTextModel(),
       input: [
         {
           role: 'system',
@@ -388,7 +497,7 @@ app.post('/api/compose', async (req, res, next) => {
     const client = getClient()
     const prompt = buildContentPrompt(request)
     const response = await client.responses.create({
-      model: textModel,
+      model: getTextModel(),
       input: [
         {
           role: 'system',
@@ -421,7 +530,7 @@ app.post('/api/image', async (req, res, next) => {
       res.json({
         image: createMockImage(request),
         mime: 'image/svg+xml',
-        model: imageModel,
+        model: getImageModel(),
         mock: true,
       })
       return
@@ -447,7 +556,7 @@ app.post('/api/image', async (req, res, next) => {
     res.json({
       image: result.image,
       mime: result.mime,
-      model: imageModel,
+      model: getImageModel(),
     })
   } catch (error) {
     next(error)

@@ -1,4 +1,4 @@
-import type { ComposeRequest, ComposeResponse, GenerateImageRequest, GenerateImageResponse, HealthResponse, SuggestSettingsRequest, SuggestSettingsResponse } from './types'
+import type { ComposeRequest, ComposeResponse, EnvConfigResponse, GenerateImageRequest, GenerateImageResponse, HealthResponse, SaveEnvConfigRequest, SuggestSettingsRequest, SuggestSettingsResponse } from './types'
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}))
@@ -12,6 +12,20 @@ async function readJson<T>(response: Response): Promise<T> {
 export async function getHealth(): Promise<HealthResponse> {
   const response = await fetch('/api/health')
   return readJson<HealthResponse>(response)
+}
+
+export async function getEnvConfig(): Promise<EnvConfigResponse> {
+  const response = await fetch('/api/env-config')
+  return readJson<EnvConfigResponse>(response)
+}
+
+export async function saveEnvConfig(request: SaveEnvConfigRequest): Promise<EnvConfigResponse> {
+  const response = await fetch('/api/env-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  return readJson<EnvConfigResponse>(response)
 }
 
 export async function composeProject(request: ComposeRequest): Promise<ComposeResponse> {

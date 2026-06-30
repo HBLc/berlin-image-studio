@@ -140,6 +140,72 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.config-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--ink);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: start center;
+  padding: 72px 18px 18px;
+  overflow: auto;
+  background: rgba(33, 25, 23, 0.42);
+}
+
+.config-modal {
+  width: min(680px, 100%);
+  border: 1px solid rgba(75, 54, 43, 0.18);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgba(33, 25, 23, 0.28);
+  padding: 18px;
+}
+
+.config-form {
+  display: grid;
+  gap: 4px;
+  margin-top: 18px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.secret-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+.secret-field input {
+  border-radius: 8px 0 0 8px;
+}
+
+.secret-field button {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(520px, 1fr) minmax(300px, 380px);
@@ -394,6 +460,18 @@ button:disabled {
   margin: 0 0 12px;
   line-height: 1.5;
   font-size: 13px;
+}
+
+.success-box {
+  border: 1px solid rgba(31, 122, 91, 0.22);
+  border-radius: 8px;
+  background: #eef8f3;
+  color: #15563f;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  line-height: 1.5;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .count-label {
@@ -740,6 +818,7 @@ button:disabled {
 
   .field-grid,
   .field-grid.three,
+  .config-grid,
   .detail-band {
     grid-template-columns: 1fr;
   }
