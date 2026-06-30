@@ -68,6 +68,17 @@ export interface ComposeResponse {
   project: XhsProject
 }
 
+export interface SuggestSettingsRequest {
+  topic: string
+}
+
+export interface SuggestSettingsResponse {
+  field: Field
+  visualStyle: VisualStyle
+  audience: string
+  mock?: boolean
+}
+
 export interface GenerateImageRequest {
   project: XhsProject
   page: XhsPage

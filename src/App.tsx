@@ -9,32 +9,44 @@ import {
   Image as ImageIcon,
   Loader2,
   RefreshCw,
+  Save,
   Sparkles,
   Trash2,
   WandSparkles,
 } from 'lucide-react'
-import { composeProject, generateImage, getHealth } from './api'
+import { composeProject, generateImage, getHealth, suggestSettings } from './api'
 import { exportProjectZip, toSavedProject } from './exportProject'
 import { clearHistory, loadHistory, rememberProject, saveHistory } from './storage'
-import type { Field, HealthResponse, ImageFormat, ImageQuality, ModerationLevel, SavedProject, StudioConfig, VisualStyle, XhsPage, XhsProject } from './types'
+import type { Field, HealthResponse, SavedProject, StudioConfig, VisualStyle, XhsPage, XhsProject } from './types'
 
 const fields: Field[] = ['生活方式', '美妆护肤', '职场效率', '学习成长', '旅行探店', '美食烘焙', '运动健康', '母婴家庭', '家居收纳', '数码工具']
 const styles: VisualStyle[] = ['清爽实用', '杂志质感', '手账拼贴', '专业干货', '温暖日常', '科技极简']
-const sizes = ['1024x1536', '1080x1440', '1536x2048', '1024x1024']
+const XHS_IMAGE_SIZE = '1200x1600'
+const XHS_IMAGE_QUALITY = 'medium'
+const XHS_IMAGE_FORMAT = 'png'
 
 const defaultConfig: StudioConfig = {
   field: '生活方式',
   audience: '想提升内容质感的新手创作者',
   visualStyle: '清爽实用',
-  pageCount: 5,
-  size: '1024x1536',
-  quality: 'medium',
-  outputFormat: 'png',
+  pageCount: 8,
+  size: XHS_IMAGE_SIZE,
+  quality: XHS_IMAGE_QUALITY,
+  outputFormat: XHS_IMAGE_FORMAT,
   moderation: 'auto',
   useCoverReference: true,
 }
 
 type PageStatus = 'idle' | 'loading' | 'done' | 'error'
+type BusyState = 'settings' | 'compose' | 'page' | 'images' | 'all' | null
+
+interface PageDraft {
+  headline: string
+  subhead: string
+  bulletsText: string
+  visualBrief: string
+  imagePrompt: string
+}
 
 function classNames(...items: Array<string | false | undefined>): string {
   return items.filter(Boolean).join(' ')
@@ -60,6 +72,94 @@ function copyText(value: string) {
   void navigator.clipboard.writeText(value)
 }
 
+function clampPageCount(value: number): number {
+  return Math.min(10, Math.max(3, value))
+}
+
+function normalizeConfig(value: StudioConfig): StudioConfig {
+  return {
+    ...value,
+    pageCount: clampPageCount(value.pageCount),
+    size: XHS_IMAGE_SIZE,
+    quality: XHS_IMAGE_QUALITY,
+    outputFormat: XHS_IMAGE_FORMAT,
+    moderation: 'auto',
+  }
+}
+
+function pageToDraft(page: XhsPage): PageDraft {
+  return {
+    headline: page.headline,
+    subhead: page.subhead ?? '',
+    bulletsText: page.bullets.join('\n'),
+    visualBrief: page.visualBrief,
+    imagePrompt: page.imagePrompt,
+  }
+}
+
+function draftToPage(page: XhsPage, draft: PageDraft): XhsPage {
+  return {
+    ...page,
+    headline: draft.headline.trim() || page.headline,
+    subhead: draft.subhead.trim(),
+    bullets: draft.bulletsText
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+    visualBrief: draft.visualBrief.trim(),
+    imagePrompt: draft.imagePrompt.trim(),
+  }
+}
+
+function textareaRows(value: string, minRows: number): number {
+  const rows = value.split(/\r?\n/).reduce((total, line) => {
+    const weightedLength = Array.from(line).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 2 : 1), 0)
+    return total + Math.max(1, Math.ceil(weightedLength / 72))
+  }, 0)
+  return Math.max(minRows, rows)
+}
+
+function buildDraftImagePrompt(project: XhsProject, page: XhsPage): string {
+  const pageText = [
+    `主标题：${page.headline}`,
+    page.subhead ? `副标题：${page.subhead}` : '',
+    page.bullets.length ? `要点：${page.bullets.join('；')}` : '',
+    page.visualBrief ? `画面：${page.visualBrief}` : '',
+  ].filter(Boolean).join('\n')
+
+  const outline = project.pages
+    .map((item) => `${item.index + 1}. ${item.id === page.id ? page.headline : item.headline}`)
+    .join('\n')
+
+  return [
+    '生成一张小红书风格的竖版图文图片。',
+    '画面比例 3:4，适合手机阅读。',
+    '不要生成平台 logo、水印、账号 ID、二维码或手机边框。',
+    '所有文字必须清晰、完整、正向排版，不能旋转或倒置。',
+    '文字应作为画面排版的一部分，不要只生成纯插画。',
+    '',
+    `原始选题：${project.topic}`,
+    `页面类型：${page.type}`,
+    `内容领域：${project.config.field}`,
+    `视觉风格：${project.config.visualStyle}`,
+    '',
+    '当前页面内容：',
+    pageText,
+    '',
+    '整套图文结构：',
+    outline,
+    '',
+    page.type === 'cover'
+      ? '封面要有强视觉焦点，主标题醒目，副标题在标题附近。'
+      : page.type === 'summary'
+        ? '总结页要有完成感，重点信息清晰，适合收藏。'
+        : '内容页要层级分明，重点短句突出，留白克制，适合连续滑读。',
+    project.config.useCoverReference && page.index > 0
+      ? '参考输入图片的配色、字体层级和版式节奏，但不要复制其中的文字。'
+      : '整套页面要形成统一的配色、字体层级、装饰元素和留白节奏。',
+  ].join('\n')
+}
+
 function StatusIcon({ status }: { status: PageStatus }) {
   if (status === 'loading') return <Loader2 className="spin" size={16} aria-hidden="true" />
   if (status === 'done') return <Check size={16} aria-hidden="true" />
@@ -75,9 +175,10 @@ export default function App() {
   const [pageStatus, setPageStatus] = useState<Record<string, PageStatus>>({})
   const [pageErrors, setPageErrors] = useState<Record<string, string>>({})
   const [selectedPageId, setSelectedPageId] = useState<string>('')
+  const [pageDraft, setPageDraft] = useState<PageDraft | null>(null)
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [history, setHistory] = useState<SavedProject[]>([])
-  const [busy, setBusy] = useState<'compose' | 'images' | 'all' | null>(null)
+  const [busy, setBusy] = useState<BusyState>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -101,7 +202,35 @@ export default function App() {
     return project?.pages.find((page) => page.id === selectedPageId) ?? project?.pages[0] ?? null
   }, [project, selectedPageId])
 
+  useEffect(() => {
+    setPageDraft(selectedPage ? pageToDraft(selectedPage) : null)
+  }, [selectedPage?.id])
+
   const generatedCount = useMemo(() => Object.values(images).filter(Boolean).length, [images])
+
+  async function fillSettings() {
+    const cleanTopic = topic.trim()
+    if (!cleanTopic) {
+      setError('请输入选题')
+      return
+    }
+
+    setBusy('settings')
+    setError('')
+    try {
+      const next = await suggestSettings({ topic: cleanTopic })
+      setConfig((current) => normalizeConfig({
+        ...current,
+        field: fields.includes(next.field) ? next.field : current.field,
+        visualStyle: styles.includes(next.visualStyle) ? next.visualStyle : current.visualStyle,
+        audience: next.audience || current.audience,
+      }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function createProject(): Promise<XhsProject | null> {
     const cleanTopic = topic.trim()
@@ -113,7 +242,9 @@ export default function App() {
     setBusy('compose')
     setError('')
     try {
-      const response = await composeProject({ topic: cleanTopic, config })
+      const cleanConfig = normalizeConfig(config)
+      setConfig(cleanConfig)
+      const response = await composeProject({ topic: cleanTopic, config: cleanConfig })
       setProject(response.project)
       setImages({})
       setPageStatus(Object.fromEntries(response.project.pages.map((page) => [page.id, 'idle'])))
@@ -129,10 +260,14 @@ export default function App() {
   }
 
   async function generatePageImage(targetProject: XhsProject, page: XhsPage, referenceImage?: string): Promise<string | null> {
+    const cleanProject = {
+      ...targetProject,
+      config: normalizeConfig(targetProject.config),
+    }
     setPageStatus((current) => ({ ...current, [page.id]: 'loading' }))
     setPageErrors((current) => ({ ...current, [page.id]: '' }))
     try {
-      const response = await generateImage({ project: targetProject, page, referenceImage })
+      const response = await generateImage({ project: cleanProject, page, referenceImage })
       setImages((current) => ({ ...current, [page.id]: response.image }))
       setPageStatus((current) => ({ ...current, [page.id]: 'done' }))
       return response.image
@@ -148,27 +283,31 @@ export default function App() {
     setBusy('images')
     setError('')
 
+    const cleanProject = {
+      ...targetProject,
+      config: normalizeConfig(targetProject.config),
+    }
     const nextImages: Record<string, string> = {}
     try {
-      const cover = targetProject.pages[0]
+      const cover = cleanProject.pages[0]
       let coverImage = ''
       if (cover) {
-        const result = await generatePageImage(targetProject, cover)
+        const result = await generatePageImage(cleanProject, cover)
         if (result) {
           coverImage = result
           nextImages[cover.id] = result
         }
       }
 
-      for (const page of targetProject.pages.slice(1)) {
-        const reference = targetProject.config.useCoverReference ? coverImage : undefined
-        const result = await generatePageImage(targetProject, page, reference)
+      for (const page of cleanProject.pages.slice(1)) {
+        const reference = cleanProject.config.useCoverReference ? coverImage : undefined
+        const result = await generatePageImage(cleanProject, page, reference)
         if (result) nextImages[page.id] = result
       }
 
       const merged = { ...images, ...nextImages }
       setImages(merged)
-      const saved = rememberProject(toSavedProject(targetProject, merged))
+      const saved = rememberProject(toSavedProject(cleanProject, merged))
       setHistory(saved)
     } finally {
       setBusy(null)
@@ -184,7 +323,7 @@ export default function App() {
 
   function loadSaved(item: SavedProject) {
     setProject(item)
-    setConfig(item.config)
+    setConfig(normalizeConfig(item.config))
     setTopic(item.topic)
     setImages(item.images ?? {})
     setPageStatus(Object.fromEntries(item.pages.map((page) => [page.id, item.images?.[page.id] ? 'done' : 'idle'])))
@@ -203,9 +342,68 @@ export default function App() {
   }
 
   function exportCurrent() {
-    if (!project) return
-    const blob = exportProjectZip(project, images)
-    downloadBlob(blob, `${project.topic.slice(0, 18) || 'red-image-studio'}.zip`)
+    const saved = saveSelectedDraft({ clearImage: false })
+    const currentProject = saved?.project ?? project
+    if (!currentProject) return
+    const blob = exportProjectZip(currentProject, images)
+    downloadBlob(blob, `${currentProject.topic.slice(0, 18) || 'red-image-studio'}.zip`)
+  }
+
+  function saveSelectedDraft(options: { clearImage?: boolean } = {}) {
+    if (!project || !selectedPage || !pageDraft) return null
+
+    const updatedBase = draftToPage(selectedPage, pageDraft)
+    const nextProjectBase = {
+      ...project,
+      config: normalizeConfig(project.config),
+      pages: project.pages.map((page) => page.id === selectedPage.id ? updatedBase : page),
+    }
+    const draftPrompt = pageDraft.imagePrompt.trim()
+    const originalPrompt = selectedPage.imagePrompt.trim()
+    const updatedPage = {
+      ...updatedBase,
+      imagePrompt: draftPrompt && draftPrompt !== originalPrompt
+        ? draftPrompt
+        : buildDraftImagePrompt(nextProjectBase, updatedBase),
+    }
+    const nextProject = {
+      ...nextProjectBase,
+      pages: nextProjectBase.pages.map((page) => page.id === selectedPage.id ? updatedPage : page),
+    }
+
+    setProject(nextProject)
+    setPageDraft(pageToDraft(updatedPage))
+
+    if (options.clearImage !== false) {
+      setImages((current) => {
+        const next = { ...current }
+        delete next[updatedPage.id]
+        return next
+      })
+      setPageStatus((current) => ({ ...current, [updatedPage.id]: 'idle' }))
+    }
+
+    return { project: nextProject, page: updatedPage }
+  }
+
+  async function generateSelectedPage() {
+    const saved = saveSelectedDraft({ clearImage: false })
+    if (!saved) return
+    const cover = saved.project.pages[0]
+    const reference = saved.project.config.useCoverReference && saved.page.index > 0 && cover
+      ? images[cover.id]
+      : undefined
+    setBusy('page')
+    try {
+      await generatePageImage(saved.project, saved.page, reference)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function generateAllFromCurrentProject() {
+    const saved = saveSelectedDraft({ clearImage: false })
+    await generateAllImages(saved?.project ?? project)
   }
 
   return (
@@ -241,25 +439,26 @@ export default function App() {
             <textarea value={topic} onChange={(event) => setTopic(event.target.value)} rows={5} />
           </label>
 
-          <div className="field-grid">
-            <label className="field-block">
-              <span>领域</span>
-              <select value={config.field} onChange={(event) => setConfig({ ...config, field: event.target.value as Field })}>
-                {fields.map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </label>
-            <label className="field-block">
-              <span>风格</span>
-              <select value={config.visualStyle} onChange={(event) => setConfig({ ...config, visualStyle: event.target.value as VisualStyle })}>
-                {styles.map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </label>
+          <div className="auto-settings">
+            <button className="secondary-button full" type="button" onClick={fillSettings} disabled={Boolean(busy)}>
+              {busy === 'settings' ? <Loader2 className="spin" size={18} /> : <WandSparkles size={18} />}
+              自动填写定位
+            </button>
+            <dl className="setting-summary">
+              <div>
+                <dt>领域</dt>
+                <dd>{config.field}</dd>
+              </div>
+              <div>
+                <dt>风格</dt>
+                <dd>{config.visualStyle}</dd>
+              </div>
+              <div>
+                <dt>读者</dt>
+                <dd>{config.audience}</dd>
+              </div>
+            </dl>
           </div>
-
-          <label className="field-block">
-            <span>目标读者</span>
-            <input value={config.audience} onChange={(event) => setConfig({ ...config, audience: event.target.value })} />
-          </label>
 
           <div className="range-row">
             <label htmlFor="page-count">页数</label>
@@ -268,31 +467,10 @@ export default function App() {
               id="page-count"
               type="range"
               min={3}
-              max={8}
+              max={10}
               value={config.pageCount}
-              onChange={(event) => setConfig({ ...config, pageCount: Number(event.target.value) })}
+              onChange={(event) => setConfig(normalizeConfig({ ...config, pageCount: Number(event.target.value) }))}
             />
-          </div>
-
-          <div className="field-grid three">
-            <label className="field-block">
-              <span>尺寸</span>
-              <select value={config.size} onChange={(event) => setConfig({ ...config, size: event.target.value })}>
-                {sizes.map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </label>
-            <label className="field-block">
-              <span>质量</span>
-              <select value={config.quality} onChange={(event) => setConfig({ ...config, quality: event.target.value as ImageQuality })}>
-                {['low', 'medium', 'high', 'auto'].map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </label>
-            <label className="field-block">
-              <span>格式</span>
-              <select value={config.outputFormat} onChange={(event) => setConfig({ ...config, outputFormat: event.target.value as ImageFormat })}>
-                {['png', 'jpeg', 'webp'].map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </label>
           </div>
 
           <div className="toggle-row">
@@ -300,18 +478,10 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={config.useCoverReference}
-                onChange={(event) => setConfig({ ...config, useCoverReference: event.target.checked })}
+                onChange={(event) => setConfig(normalizeConfig({ ...config, useCoverReference: event.target.checked }))}
               />
-              <span>用封面统一后续页面</span>
+              <span>整套保持同一风格</span>
             </label>
-            <select
-              aria-label="内容审核强度"
-              value={config.moderation}
-              onChange={(event) => setConfig({ ...config, moderation: event.target.value as ModerationLevel })}
-            >
-              <option value="auto">moderation auto</option>
-              <option value="low">moderation low</option>
-            </select>
           </div>
 
           {error && <div className="error-box" role="alert">{error}</div>}
@@ -367,23 +537,63 @@ export default function App() {
                 })}
               </div>
 
-              {selectedPage && (
+              {selectedPage && pageDraft && (
                 <div className="detail-band">
-                  <div>
+                  <div className="page-editor">
                     <p className="eyebrow">{selectedPage.type} / {selectedPage.index + 1}</p>
-                    <h3>{selectedPage.headline}</h3>
-                    {selectedPage.subhead && <p>{selectedPage.subhead}</p>}
-                    <ul>
-                      {selectedPage.bullets.map((item) => <li key={item}>{item}</li>)}
-                    </ul>
+                    <label className="field-block">
+                      <span>主标题</span>
+                      <input
+                        value={pageDraft.headline}
+                        onChange={(event) => setPageDraft({ ...pageDraft, headline: event.target.value })}
+                      />
+                    </label>
+                    <label className="field-block">
+                      <span>副标题</span>
+                      <input
+                        value={pageDraft.subhead}
+                        onChange={(event) => setPageDraft({ ...pageDraft, subhead: event.target.value })}
+                      />
+                    </label>
+                    <label className="field-block">
+                      <span>要点内容</span>
+                      <textarea
+                        className="content-editor"
+                        rows={textareaRows(pageDraft.bulletsText, 5)}
+                        value={pageDraft.bulletsText}
+                        onChange={(event) => setPageDraft({ ...pageDraft, bulletsText: event.target.value })}
+                      />
+                    </label>
+                    <label className="field-block">
+                      <span>画面说明</span>
+                      <textarea
+                        className="content-editor"
+                        rows={textareaRows(pageDraft.visualBrief, 4)}
+                        value={pageDraft.visualBrief}
+                        onChange={(event) => setPageDraft({ ...pageDraft, visualBrief: event.target.value })}
+                      />
+                    </label>
+                    <label className="field-block">
+                      <span>图片提示词</span>
+                      <textarea
+                        className="prompt-editor"
+                        rows={textareaRows(pageDraft.imagePrompt, 12)}
+                        value={pageDraft.imagePrompt}
+                        onChange={(event) => setPageDraft({ ...pageDraft, imagePrompt: event.target.value })}
+                      />
+                    </label>
                     {pageErrors[selectedPage.id] && <div className="error-box">{pageErrors[selectedPage.id]}</div>}
                   </div>
                   <div className="detail-actions">
-                    <button type="button" onClick={() => generatePageImage(project, selectedPage, selectedPage.index > 0 ? images[project.pages[0]?.id] : undefined)}>
-                      <RefreshCw size={17} />
-                      重生成
+                    <button type="button" onClick={() => saveSelectedDraft()}>
+                      <Save size={17} />
+                      保存
                     </button>
-                    <button type="button" onClick={() => copyText(selectedPage.imagePrompt)}>
+                    <button type="button" onClick={generateSelectedPage} disabled={Boolean(busy)}>
+                      {busy === 'page' ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />}
+                      生成当前页
+                    </button>
+                    <button type="button" onClick={() => copyText(pageDraft.imagePrompt)}>
                       <Copy size={17} />
                       复制提示词
                     </button>
@@ -441,9 +651,9 @@ export default function App() {
                 </div>
               </div>
 
-              <button className="primary-button full" type="button" onClick={() => generateAllImages()} disabled={!project || Boolean(busy)}>
+              <button className="primary-button full" type="button" onClick={generateAllFromCurrentProject} disabled={!project || Boolean(busy)}>
                 {busy === 'images' ? <Loader2 className="spin" size={18} /> : <ImageIcon size={18} />}
-                生成图片
+                生成整套图片
               </button>
             </div>
           ) : (

@@ -1,4 +1,4 @@
-import type { ComposeRequest, ComposeResponse, GenerateImageRequest, GenerateImageResponse, HealthResponse } from './types'
+import type { ComposeRequest, ComposeResponse, GenerateImageRequest, GenerateImageResponse, HealthResponse, SuggestSettingsRequest, SuggestSettingsResponse } from './types'
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}))
@@ -21,6 +21,15 @@ export async function composeProject(request: ComposeRequest): Promise<ComposeRe
     body: JSON.stringify(request),
   })
   return readJson<ComposeResponse>(response)
+}
+
+export async function suggestSettings(request: SuggestSettingsRequest): Promise<SuggestSettingsResponse> {
+  const response = await fetch('/api/suggest-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  return readJson<SuggestSettingsResponse>(response)
 }
 
 export async function generateImage(request: GenerateImageRequest): Promise<GenerateImageResponse> {

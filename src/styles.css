@@ -340,6 +340,51 @@ button:disabled {
   padding: 10px 14px;
 }
 
+.secondary-button.full {
+  width: 100%;
+  flex: unset;
+}
+
+.auto-settings {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.setting-summary {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.setting-summary div {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  align-items: start;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  padding: 9px 10px;
+}
+
+.setting-summary dt,
+.setting-summary dd {
+  margin: 0;
+  line-height: 1.45;
+  font-size: 13px;
+}
+
+.setting-summary dt {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.setting-summary dd {
+  color: var(--ink);
+  font-weight: 800;
+}
+
 .error-box {
   border: 1px solid rgba(180, 35, 24, 0.22);
   border-radius: 8px;
@@ -442,6 +487,10 @@ button:disabled {
   padding-top: 18px;
 }
 
+.page-editor {
+  min-width: 0;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: var(--blue);
@@ -466,6 +515,18 @@ button:disabled {
   gap: 6px;
   margin: 12px 0 0;
   padding-left: 18px;
+}
+
+.content-editor {
+  min-height: 150px;
+  overflow: hidden;
+}
+
+.prompt-editor {
+  min-height: 220px;
+  overflow: hidden;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
 }
 
 .detail-band li {

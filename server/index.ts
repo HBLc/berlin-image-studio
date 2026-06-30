@@ -2,9 +2,9 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import express from 'express'
 import OpenAI from 'openai'
-import type { ComposeRequest, GenerateImageRequest, HealthResponse, XhsPage, XhsProject } from '../src/types'
+import type { ComposeRequest, Field, GenerateImageRequest, HealthResponse, SuggestSettingsRequest, SuggestSettingsResponse, VisualStyle, XhsPage, XhsProject } from '../src/types'
 import { createMockImage, createMockProject } from './mock'
-import { buildContentPrompt, buildImagePrompt } from './prompts'
+import { buildContentPrompt, buildImagePrompt, buildSettingsPrompt } from './prompts'
 
 dotenv.config()
 
@@ -15,6 +15,8 @@ const imageModel = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2'
 const apiBaseUrl = (process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || 'https://api.openai.com/v1')
   .trim()
   .replace(/\/+$/, '')
+const fields: Field[] = ['生活方式', '美妆护肤', '职场效率', '学习成长', '旅行探店', '美食烘焙', '运动健康', '母婴家庭', '家居收纳', '数码工具']
+const visualStyles: VisualStyle[] = ['清爽实用', '杂志质感', '手账拼贴', '专业干货', '温暖日常', '科技极简']
 
 app.use(cors())
 app.use(express.json({ limit: '32mb' }))
@@ -66,6 +68,57 @@ function asStringArray(value: unknown): string[] {
   return []
 }
 
+function pickField(value: unknown, topic = ''): Field {
+  if (fields.includes(value as Field)) return value as Field
+  if (/职场|效率|副业|自由职业|工作|办公/i.test(topic)) return '职场效率'
+  if (/学习|考试|读书|课程|笔记/i.test(topic)) return '学习成长'
+  if (/护肤|美妆|化妆|穿搭|变美/i.test(topic)) return '美妆护肤'
+  if (/旅行|探店|城市|攻略|露营/i.test(topic)) return '旅行探店'
+  if (/饭|菜|早餐|烘焙|咖啡|甜品/i.test(topic)) return '美食烘焙'
+  if (/运动|健身|减脂|瑜伽|健康/i.test(topic)) return '运动健康'
+  if (/收纳|家居|装修|整理/i.test(topic)) return '家居收纳'
+  if (/数码|软件|工具|AI|电脑|手机/i.test(topic)) return '数码工具'
+  if (/孩子|母婴|育儿|亲子/i.test(topic)) return '母婴家庭'
+  return '生活方式'
+}
+
+function pickVisualStyle(value: unknown, topic = ''): VisualStyle {
+  if (visualStyles.includes(value as VisualStyle)) return value as VisualStyle
+  if (/职场|效率|学习|工具|AI|数码/i.test(topic)) return '专业干货'
+  if (/旅行|穿搭|咖啡|家居|生活/i.test(topic)) return '杂志质感'
+  if (/亲子|早餐|家庭|日常/i.test(topic)) return '温暖日常'
+  return '清爽实用'
+}
+
+function mockSettings(topic: string): SuggestSettingsResponse {
+  return {
+    field: pickField(undefined, topic),
+    visualStyle: pickVisualStyle(undefined, topic),
+    audience: /自由职业|副业/i.test(topic)
+      ? '想提升效率的自由职业者'
+      : /早餐|备餐/i.test(topic)
+        ? '想省时间的上班族'
+        : '想快速做出图文的新手创作者',
+    mock: true,
+  }
+}
+
+function normalizeSettings(raw: unknown, topic: string): SuggestSettingsResponse {
+  const data = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  const audience = typeof data.audience === 'string' && data.audience.trim()
+    ? data.audience.trim()
+    : mockSettings(topic).audience
+  return {
+    field: pickField(data.field, topic),
+    visualStyle: pickVisualStyle(data.visualStyle, topic),
+    audience,
+  }
+}
+
+function clampPageCount(value: number): number {
+  return Math.min(10, Math.max(3, value))
+}
+
 function normalizePage(raw: unknown, index: number): XhsPage {
   const item = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
   const type = item.type === 'cover' || item.type === 'summary' || item.type === 'content'
@@ -94,7 +147,7 @@ function normalizeProject(raw: unknown, request: ComposeRequest): XhsProject {
     return createMockProject(request)
   }
 
-  pages = pages.slice(0, Math.max(3, request.config.pageCount))
+  pages = pages.slice(0, clampPageCount(request.config.pageCount))
   pages[0] = { ...pages[0], type: 'cover' }
   pages[pages.length - 1] = { ...pages[pages.length - 1], type: 'summary' }
   pages = pages.map((item, index) => ({ ...item, index, id: `page-${index}-${Date.now()}` }))
@@ -282,6 +335,41 @@ app.get('/api/health', (_req, res) => {
     apiBaseUrl,
   }
   res.json(body)
+})
+
+app.post('/api/suggest-settings', async (req, res, next) => {
+  try {
+    const request = req.body as SuggestSettingsRequest
+    const topic = request.topic?.trim()
+    if (!topic) {
+      res.status(400).json({ error: '请输入选题' })
+      return
+    }
+
+    if (!hasApiKey()) {
+      res.json(mockSettings(topic))
+      return
+    }
+
+    const client = getClient()
+    const response = await client.responses.create({
+      model: textModel,
+      input: [
+        {
+          role: 'system',
+          content: '你只输出严格 JSON。不要解释。不要 Markdown。',
+        },
+        {
+          role: 'user',
+          content: buildSettingsPrompt(topic),
+        },
+      ],
+    } as never)
+
+    res.json(normalizeSettings(parseJsonObject(readOutputText(response)), topic))
+  } catch (error) {
+    next(error)
+  }
 })
 
 app.post('/api/compose', async (req, res, next) => {

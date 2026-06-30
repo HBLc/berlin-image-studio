@@ -1,5 +1,25 @@
 import type { ComposeRequest, PageType, XhsPage } from '../src/types'
 
+export function buildSettingsPrompt(topic: string): string {
+  return [
+    '你是小红书内容定位助手。',
+    '根据选题判断最适合的领域、视觉风格和目标读者。',
+    '输出必须是严格 JSON，不要 Markdown，不要解释。',
+    '',
+    `选题：${topic}`,
+    '',
+    '可选领域只能是：生活方式、美妆护肤、职场效率、学习成长、旅行探店、美食烘焙、运动健康、母婴家庭、家居收纳、数码工具。',
+    '可选视觉风格只能是：清爽实用、杂志质感、手账拼贴、专业干货、温暖日常、科技极简。',
+    '',
+    'JSON 结构：',
+    '{',
+    '  "field": "领域",',
+    '  "visualStyle": "视觉风格",',
+    '  "audience": "目标读者，12到24个中文字符"',
+    '}',
+  ].join('\n')
+}
+
 export function buildContentPrompt({ topic, config }: ComposeRequest): string {
   return [
     '你是小红书图文策划和视觉编辑。',
