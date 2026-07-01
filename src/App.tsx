@@ -419,7 +419,7 @@ export default function App() {
   useEffect(() => {
     void refreshHealth()
     void loadEnvConfig()
-    setHistory(loadHistory())
+    void loadHistory().then(setHistory)
   }, [])
 
   async function refreshHealth() {
@@ -831,7 +831,7 @@ export default function App() {
 
       if (signal?.aborted) return
       const merged = workspaceRef.current[operationMode].images
-      const saved = rememberProject(toSavedProject(cleanProject, merged))
+      const saved = await rememberProject(toSavedProject(cleanProject, merged))
       setHistory(saved)
     } finally {
       if (controller) finishGeneration(controller)
@@ -903,13 +903,13 @@ export default function App() {
     })
   }
 
-  function deleteSaved(id: string) {
-    const next = saveHistory(history.filter((item) => item.id !== id))
+  async function deleteSaved(id: string) {
+    const next = await saveHistory(history.filter((item) => item.id !== id))
     setHistory(next)
   }
 
-  function clearSaved() {
-    clearHistory()
+  async function clearSaved() {
+    await clearHistory()
     setHistory([])
   }
 
@@ -1453,7 +1453,7 @@ export default function App() {
           <div className="history-block">
             <div className="mini-heading">
               <span><History size={16} />历史</span>
-              <button type="button" onClick={clearSaved} disabled={!history.length}><Trash2 size={15} />清空</button>
+              <button type="button" onClick={() => void clearSaved()} disabled={!history.length}><Trash2 size={15} />清空</button>
             </div>
             <div className="history-list">
               {history.length === 0 && <p className="muted">暂无记录</p>}
@@ -1463,7 +1463,7 @@ export default function App() {
                     <strong>{item.topic}</strong>
                     <span>{new Date(item.createdAt).toLocaleString()}</span>
                   </button>
-                  <button className="icon-button danger" type="button" aria-label="删除历史" onClick={() => deleteSaved(item.id)}>
+                  <button className="icon-button danger" type="button" aria-label="删除历史" onClick={() => void deleteSaved(item.id)}>
                     <Trash2 size={16} />
                   </button>
                 </div>
