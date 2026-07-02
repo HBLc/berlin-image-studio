@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
+  Clock3,
   Copy,
   Download,
   Eye,
@@ -63,7 +64,7 @@ const defaultConfig: StudioConfig = {
   useCoverReference: true,
 }
 
-type PageStatus = 'idle' | 'loading' | 'done' | 'error'
+type PageStatus = 'idle' | 'queued' | 'loading' | 'done' | 'error'
 type BusyState = 'settings' | 'compose' | 'all' | null
 type PendingSettingsAction = 'compose' | 'all'
 type ImageReferenceResolver = string | (() => string | undefined) | undefined
@@ -402,10 +403,23 @@ function buildDraftImagePrompt(project: XhsProject, page: XhsPage): string {
 }
 
 function StatusIcon({ status }: { status: PageStatus }) {
+  if (status === 'queued') return <Clock3 size={16} aria-hidden="true" />
   if (status === 'loading') return <Loader2 className="spin" size={16} aria-hidden="true" />
   if (status === 'done') return <Check size={16} aria-hidden="true" />
   if (status === 'error') return <AlertCircle size={16} aria-hidden="true" />
   return <ImageIcon size={16} aria-hidden="true" />
+}
+
+function statusLabel(status: PageStatus): string {
+  if (status === 'queued') return '排队中'
+  if (status === 'loading') return '生成中'
+  if (status === 'done') return '已完成'
+  if (status === 'error') return '失败'
+  return '未生成'
+}
+
+function isImageOperationStatus(status?: PageStatus): boolean {
+  return status === 'queued' || status === 'loading'
 }
 
 export default function App() {
@@ -591,7 +605,7 @@ export default function App() {
 
   function resetLoadingStatuses(targetMode: ProjectMode) {
     setPageStatusForMode(targetMode, (current) => Object.fromEntries(
-      Object.entries(current).map(([pageId, status]) => [pageId, status === 'loading' ? 'idle' : status]),
+      Object.entries(current).map(([pageId, status]) => [pageId, isImageOperationStatus(status) ? 'idle' : status]),
     ))
   }
 
@@ -697,7 +711,7 @@ export default function App() {
 
     if (isPageQueuedOrActive(operationMode, page.id)) return Promise.resolve(null)
 
-    setPageStatusForMode(operationMode, (current) => ({ ...current, [page.id]: 'loading' }))
+    setPageStatusForMode(operationMode, (current) => ({ ...current, [page.id]: 'queued' }))
     setPageErrorsForMode(operationMode, (current) => ({ ...current, [page.id]: '' }))
 
     return new Promise((resolve) => {
@@ -794,6 +808,10 @@ export default function App() {
   }, [previewPageId, previewablePages])
 
   const canNavigatePreview = previewablePages.length > 1
+  const selectedPageStatus = selectedPage ? pageStatus[selectedPage.id] ?? 'idle' : 'idle'
+  const selectedPageBusy = isImageOperationStatus(selectedPageStatus)
+  const adjustPageStatus = adjustPage ? pageStatus[adjustPage.id] ?? 'idle' : 'idle'
+  const adjustPageBusy = isImageOperationStatus(adjustPageStatus)
 
   useEffect(() => {
     setPageDraft(selectedPage ? pageToDraft(selectedPage) : null)
@@ -1352,9 +1370,9 @@ export default function App() {
               <button className="secondary-button" type="button" onClick={closeAdjustImageDialog}>
                 取消
               </button>
-              <button className="primary-button" type="button" onClick={submitAdjustImage} disabled={!adjustInstruction.trim() || pageStatus[adjustPage.id] === 'loading'}>
-                {pageStatus[adjustPage.id] === 'loading' ? <Loader2 className="spin" size={18} /> : <WandSparkles size={18} />}
-                开始调整
+              <button className="primary-button" type="button" onClick={submitAdjustImage} disabled={!adjustInstruction.trim() || adjustPageBusy}>
+                {adjustPageStatus === 'loading' ? <Loader2 className="spin" size={18} /> : adjustPageStatus === 'queued' ? <Clock3 size={18} /> : <WandSparkles size={18} />}
+                {adjustPageStatus === 'queued' ? '排队中' : adjustPageStatus === 'loading' ? '处理中' : '开始调整'}
               </button>
             </div>
           </section>
@@ -1560,7 +1578,10 @@ export default function App() {
               <ImageIcon size={20} aria-hidden="true" />
               <h2>页面</h2>
             </div>
-            <div className="count-label">{generatedCount}/{project?.pages.length ?? 0}</div>
+            <div className="count-label">
+              <span>{generatedCount}/{project?.pages.length ?? 0}</span>
+              {isImageBusy && <span>请求中 {activeImageCount} / 排队 {queuedImageCount}</span>}
+            </div>
           </div>
 
           {!project ? (
@@ -1574,16 +1595,17 @@ export default function App() {
                 {project.pages.map((page) => {
                   const image = images[page.id]
                   const status = pageStatus[page.id] ?? 'idle'
+                  const showStateBadge = status === 'queued' || status === 'loading' || status === 'error'
                   return (
                     <button
-                      className={classNames('page-tile', selectedPageId === page.id && 'active')}
+                      className={classNames('page-tile', selectedPageId === page.id && 'active', `status-${status}`)}
                       type="button"
                       key={page.id}
                       onClick={(event) => {
                         setSelectedPageId(page.id)
                         if (image && (event.target as HTMLElement).closest('.page-image')) openPreview(page.id)
                       }}
-                      aria-label={`${page.headline}${image ? '，点击图片查看大图' : ''}`}
+                      aria-label={`${page.headline}，${statusLabel(status)}${image ? '，点击图片查看大图' : ''}`}
                     >
                       <div className={classNames('page-image', project.config.mode === 'taobao' && 'square')}>
                         {image ? (
@@ -1592,6 +1614,12 @@ export default function App() {
                             <span className="zoom-affordance"><Maximize2 size={17} /></span>
                           </>
                         ) : <span>{page.index + 1}</span>}
+                        {showStateBadge && (
+                          <span className={classNames('page-state-badge', `state-${status}`)}>
+                            <StatusIcon status={status} />
+                            {statusLabel(status)}
+                          </span>
+                        )}
                       </div>
                       <div className="page-meta">
                         <StatusIcon status={status} />
@@ -1654,14 +1682,14 @@ export default function App() {
                       <Save size={17} />
                       保存
                     </button>
-                    <button type="button" onClick={generateSelectedImage} disabled={Boolean(busy) || pageStatus[selectedPage.id] === 'loading'}>
-                      {pageStatus[selectedPage.id] === 'loading' ? <Loader2 className="spin" size={17} /> : <ImageIcon size={17} />}
-                      生成图片
+                    <button type="button" onClick={generateSelectedImage} disabled={Boolean(busy) || selectedPageBusy}>
+                      {selectedPageStatus === 'loading' ? <Loader2 className="spin" size={17} /> : selectedPageStatus === 'queued' ? <Clock3 size={17} /> : <ImageIcon size={17} />}
+                      {selectedPageStatus === 'queued' ? '排队中' : selectedPageStatus === 'loading' ? '生成中' : '生成图片'}
                     </button>
                     {images[selectedPage.id] && (
-                      <button type="button" onClick={openAdjustImageDialog} disabled={Boolean(busy) || pageStatus[selectedPage.id] === 'loading'}>
-                        <WandSparkles size={17} />
-                        调整图片
+                      <button type="button" onClick={openAdjustImageDialog} disabled={Boolean(busy) || selectedPageBusy}>
+                        {selectedPageStatus === 'loading' ? <Loader2 className="spin" size={17} /> : selectedPageStatus === 'queued' ? <Clock3 size={17} /> : <WandSparkles size={17} />}
+                        {selectedPageStatus === 'queued' ? '排队中' : selectedPageStatus === 'loading' ? '处理中' : '调整图片'}
                       </button>
                     )}
                     <button type="button" onClick={() => copyText(pageDraft.imagePrompt)}>

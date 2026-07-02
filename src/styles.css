@@ -674,9 +674,18 @@ button:disabled {
 }
 
 .count-label {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
   color: var(--muted);
   font-size: 14px;
   font-weight: 800;
+}
+
+.count-label span + span {
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--blue);
 }
 
 .empty-state,
@@ -715,6 +724,18 @@ button:disabled {
 .page-tile.active {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(201, 56, 43, 0.12);
+}
+
+.page-tile.status-queued {
+  border-color: rgba(185, 129, 25, 0.34);
+}
+
+.page-tile.status-loading {
+  border-color: rgba(40, 97, 128, 0.34);
+}
+
+.page-tile.status-error {
+  border-color: rgba(180, 35, 24, 0.34);
 }
 
 .page-image {
@@ -761,6 +782,48 @@ button:disabled {
   transition: opacity 160ms ease;
 }
 
+.page-state-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100% - 16px);
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #fff;
+  background: rgba(33, 25, 23, 0.68);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.page-state-badge svg {
+  flex: 0 0 auto;
+}
+
+.page-state-badge.state-queued {
+  border-color: rgba(185, 129, 25, 0.28);
+  background: #fff7e8;
+  color: #744f0f;
+}
+
+.page-state-badge.state-loading {
+  border-color: rgba(40, 97, 128, 0.28);
+  background: #eef7fb;
+  color: #20566f;
+}
+
+.page-state-badge.state-error {
+  border-color: rgba(180, 35, 24, 0.24);
+  background: #fff0ed;
+  color: var(--danger);
+}
+
 .page-tile:hover .zoom-affordance,
 .page-tile:focus-visible .zoom-affordance {
   opacity: 1;
@@ -775,6 +838,22 @@ button:disabled {
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+}
+
+.page-tile.status-queued .page-meta svg {
+  color: #9a680d;
+}
+
+.page-tile.status-loading .page-meta svg {
+  color: var(--blue);
+}
+
+.page-tile.status-done .page-meta svg {
+  color: var(--secondary);
+}
+
+.page-tile.status-error .page-meta svg {
+  color: var(--danger);
 }
 
 .page-meta span {
