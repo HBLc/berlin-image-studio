@@ -254,6 +254,14 @@ function formatFullOutline(pages: XhsPage[], mode: ProjectMode): string {
   return pages.map((page) => formatPageContent(page, mode)).join('\n\n<page>\n\n')
 }
 
+function imageSafetyRules(): string[] {
+  return [
+    '【安全画面规则】如果主题涉及婴幼儿、儿童、身体护理、洗澡、皮肤、减脂、医美、疾病、药品或功效，请改用静物、用品清单、步骤卡、流程图、图标、信息卡、家居场景、商品细节或包装画面表达。',
+    '【安全画面规则】不要生成裸露、半裸、洗澡过程、身体清洁动作、身体接触、隐私部位、病变部位特写、治疗前后对比、真实儿童身体或正在洗澡的人像。',
+    '【安全画面规则】不要生成治疗、治愈、绝对安全、保证有效、永久、无副作用等无法证明或医疗化承诺。',
+  ]
+}
+
 function buildDraftImagePrompt(project: XhsProject, page: XhsPage): string {
   const mode = project.config.mode ?? 'xhs'
   const nextPages = project.pages.map((item) => item.id === page.id ? page : item)
@@ -265,6 +273,7 @@ function buildDraftImagePrompt(project: XhsProject, page: XhsPage): string {
       '请生成一张淘宝电商风格的商品宣传图。',
       '【合规特别注意】不要带有淘宝 logo、平台水印、二维码、店铺 ID 或手机边框。',
       '【合规特别注意】如果参考图片里有水印、logo、人物隐私信息，请去掉。',
+      ...imageSafetyRules(),
       '',
       '当前图片内容：',
       pageText,
@@ -324,6 +333,7 @@ function buildDraftImagePrompt(project: XhsProject, page: XhsPage): string {
     '请生成一张小红书风格的图文内容图片。',
     '【合规特别注意的】注意不要带有任何小红书的 logo，不要有右下角的用户 id 以及 logo。',
     '【合规特别注意的】如果参考图片里有水印和 logo，请一定要去掉。',
+    ...imageSafetyRules(),
     '',
     '页面内容：',
     pageText,

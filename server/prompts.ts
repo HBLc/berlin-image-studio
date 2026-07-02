@@ -29,6 +29,24 @@ function formatFullOutline(pages: XhsPage[], mode: ProjectMode): string {
   return pages.map((page) => formatPageContent(page, mode)).join('\n\n<page>\n\n')
 }
 
+function outlineSafetyRules(mode: ProjectMode): string[] {
+  const visualName = mode === 'taobao' ? '画面说明' : 'visualBrief'
+  return [
+    '安全约束：',
+    `- ${visualName} 不要设计裸露、半裸、洗澡过程、身体清洁动作、身体接触、隐私部位、病变部位特写、治疗前后对比。`,
+    '- 涉及婴幼儿、儿童、身体护理、皮肤、减脂、医美、疾病、药品或功效时，优先设计静物、用品清单、步骤卡、流程图、图标、信息卡、家居场景、商品细节或包装画面。',
+    '- 不要写治疗、治愈、绝对安全、保证有效、永久、无副作用等无法证明或医疗化表述。',
+  ]
+}
+
+function imageSafetyRules(): string[] {
+  return [
+    '【安全画面规则】如果主题涉及婴幼儿、儿童、身体护理、洗澡、皮肤、减脂、医美、疾病、药品或功效，请改用静物、用品清单、步骤卡、流程图、图标、信息卡、家居场景、商品细节或包装画面表达。',
+    '【安全画面规则】不要生成裸露、半裸、洗澡过程、身体清洁动作、身体接触、隐私部位、病变部位特写、治疗前后对比、真实儿童身体或正在洗澡的人像。',
+    '【安全画面规则】不要生成治疗、治愈、绝对安全、保证有效、永久、无副作用等无法证明或医疗化承诺。',
+  ]
+}
+
 export function buildSettingsPrompt(topic: string, mode: ProjectMode = 'xhs'): string {
   if (mode === 'taobao') {
     return [
@@ -101,6 +119,7 @@ export function buildContentPrompt({ topic, config }: ComposeRequest): string {
       '}',
       '',
       '要求：',
+      ...outlineSafetyRules('taobao'),
       '1. 第一张必须是商品主图，type 为 cover，突出商品主体和核心利益点。',
       '2. 中间页为卖点图、场景图、细节图或对比图，type 为 content。',
       '3. 最后一张为促销收口或购买理由总结，type 为 summary。',
@@ -143,6 +162,7 @@ export function buildContentPrompt({ topic, config }: ComposeRequest): string {
     '}',
     '',
     '要求：',
+    ...outlineSafetyRules('xhs'),
     '1. 第一页必须是吸引人的封面/标题页，type 为 cover，包含标题和副标题。',
     '2. 最后一页必须是总结或行动呼吁，type 为 summary。',
     '3. pages 数组必须正好等于生成页数，每个对象代表一页。',
@@ -175,6 +195,7 @@ export function buildImagePrompt(args: {
       '请生成一张淘宝电商风格的商品宣传图。',
       '【合规特别注意】不要带有淘宝 logo、平台水印、二维码、店铺 ID 或手机边框。',
       '【合规特别注意】如果参考图片里有水印、logo、人物隐私信息，请去掉。',
+      ...imageSafetyRules(),
       '',
       '当前图片内容：',
       pageText,
@@ -234,6 +255,7 @@ export function buildImagePrompt(args: {
     '请生成一张小红书风格的图文内容图片。',
     '【合规特别注意的】注意不要带有任何小红书的 logo，不要有右下角的用户 id 以及 logo。',
     '【合规特别注意的】如果参考图片里有水印和 logo，请一定要去掉。',
+    ...imageSafetyRules(),
     '',
     '页面内容：',
     pageText,

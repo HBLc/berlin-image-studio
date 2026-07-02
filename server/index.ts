@@ -307,28 +307,113 @@ function buildApiUrl(path: string): string {
   return `${getApiBaseUrl()}/${path.replace(/^\/+/, '')}`
 }
 
-async function getApiErrorMessage(response: Response): Promise<string> {
+type HttpError = Error & { status?: number; code?: string; request_id?: string }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function getStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function extractRequestId(message?: string): string | undefined {
+  if (!message) return undefined
+  const match = message.match(/request ID\s+([a-z0-9-]+)/i)
+  return match?.[1]
+}
+
+function makeHttpError(message: string, status?: number, code?: string, requestId?: string): HttpError {
+  const error = new Error(message) as HttpError
+  if (status) error.status = status
+  if (code) error.code = code
+  if (requestId) error.request_id = requestId
+  return error
+}
+
+function formatModerationBlockedError(error: Record<string, unknown>, payload: Record<string, unknown>, status?: number): HttpError {
+  const message = getStringField(error, 'message')
+  const details = isRecord(error.moderation_details) ? error.moderation_details : undefined
+  const stage = details ? getStringField(details, 'moderation_stage') : undefined
+  const categories = Array.isArray(details?.categories)
+    ? details.categories.filter((item): item is string => typeof item === 'string')
+    : []
+  const requestId = getStringField(error, 'request_id')
+    || getStringField(error, 'requestId')
+    || getStringField(payload, 'request_id')
+    || getStringField(payload, 'requestId')
+    || extractRequestId(message)
+  const stageText = stage === 'output'
+    ? '生成结果未通过安全检查'
+    : stage === 'input'
+      ? '提示词未通过安全检查'
+      : '安全检查未通过'
+  const suggestion = '处理建议：把画面改成静物、信息卡、流程图、商品细节或场景道具；删除裸露、洗澡/清洁身体、儿童真人身体、隐私部位、医疗治疗、前后对比、夸张功效和绝对化承诺。'
+
+  return makeHttpError([
+    `图片生成被安全系统拦截：${stageText}。`,
+    suggestion,
+    requestId ? `请求 ID：${requestId}` : '',
+    categories.length ? `拦截分类：${categories.join(', ')}` : '',
+  ].filter(Boolean).join('\n'), status || 400, 'moderation_blocked', requestId)
+}
+
+function readImageApiError(payload: unknown, status?: number): HttpError | null {
+  if (!isRecord(payload)) return null
+
+  const payloadCode = getStringField(payload, 'code')
+  const payloadMessage = getStringField(payload, 'message')
+  const payloadRequestId = getStringField(payload, 'request_id') || getStringField(payload, 'requestId')
+
+  if (typeof payload.error === 'string' && payload.error.trim()) {
+    return makeHttpError(payload.error, status, payloadCode, payloadRequestId)
+  }
+
+  if (isRecord(payload.error)) {
+    const code = getStringField(payload.error, 'code') || payloadCode
+    const message = getStringField(payload.error, 'message') || payloadMessage
+    const requestId = getStringField(payload.error, 'request_id')
+      || getStringField(payload.error, 'requestId')
+      || payloadRequestId
+      || extractRequestId(message)
+
+    if (code === 'moderation_blocked') {
+      return formatModerationBlockedError(payload.error, payload, status)
+    }
+
+    if (message) return makeHttpError(message, status, code, requestId)
+  }
+
+  if (payloadMessage) return makeHttpError(payloadMessage, status, payloadCode, payloadRequestId)
+  return null
+}
+
+async function getApiError(response: Response): Promise<HttpError> {
   const cloned = response.clone()
   try {
-    const payload = await response.json() as {
+    const payload = await response.json() as unknown
+    const apiError = readImageApiError(payload, response.status)
+    if (apiError) return apiError
+    const fallbackPayload = payload as {
       error?: { message?: string } | string
       detail?: unknown
       message?: string
     }
-    if (typeof payload.error === 'object' && payload.error?.message) return payload.error.message
-    if (typeof payload.error === 'string') return payload.error
-    if (typeof payload.message === 'string') return payload.message
-    if (typeof payload.detail === 'string') return payload.detail
-    if (Array.isArray(payload.detail)) return payload.detail.map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join('\n')
+    if (typeof fallbackPayload.error === 'object' && fallbackPayload.error?.message) return makeHttpError(fallbackPayload.error.message, response.status)
+    if (typeof fallbackPayload.error === 'string') return makeHttpError(fallbackPayload.error, response.status)
+    if (typeof fallbackPayload.message === 'string') return makeHttpError(fallbackPayload.message, response.status)
+    if (typeof fallbackPayload.detail === 'string') return makeHttpError(fallbackPayload.detail, response.status)
+    if (Array.isArray(fallbackPayload.detail)) return makeHttpError(fallbackPayload.detail.map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join('\n'), response.status)
   } catch {
     try {
       const text = await cloned.text()
-      if (text.trim()) return text
+      if (text.trim()) return makeHttpError(text, response.status)
     } catch {
       // ignore
     }
   }
-  return `HTTP ${response.status}`
+  return makeHttpError(`HTTP ${response.status}`, response.status)
 }
 
 function normalizeBase64Image(value: string, fallbackMime: string): string {
@@ -345,19 +430,22 @@ async function fetchImageAsDataUrl(url: string, fallbackMime: string, signal?: A
 }
 
 async function parseImageApiResponse(response: Response, mime: string, signal?: AbortSignal): Promise<string> {
-  if (!response.ok) throw new Error(await getApiErrorMessage(response))
+  if (!response.ok) throw await getApiError(response)
 
-  const payload = await response.json() as {
-    data?: Array<{ b64_json?: string; url?: string }>
-    b64_json?: string
-    url?: string
-  } | Array<{ b64_json?: string; url?: string }>
+  type ImageApiImageItem = { b64_json?: string; url?: string }
+  const payload = await response.json() as unknown
+  const apiError = readImageApiError(payload, 400)
+  if (apiError) throw apiError
+
+  const recordPayload = isRecord(payload) ? payload as { data?: ImageApiImageItem[] } & ImageApiImageItem : undefined
 
   const items = Array.isArray(payload)
     ? payload
-    : Array.isArray(payload.data)
-      ? payload.data
-      : [payload]
+    : Array.isArray(recordPayload?.data)
+      ? recordPayload.data
+      : recordPayload
+        ? [recordPayload]
+        : []
 
   for (const item of items) {
     if (item?.b64_json) return normalizeBase64Image(item.b64_json, mime)
