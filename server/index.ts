@@ -572,7 +572,7 @@ app.post('/api/image', async (req, res, next) => {
 
     const { page, project } = request
     const config = project.config
-    const prompt = page.imagePrompt || buildImagePrompt({
+    const basePrompt = page.imagePrompt || buildImagePrompt({
       topic: project.topic,
       page,
       pageType: page.type,
@@ -580,6 +580,22 @@ app.post('/api/image', async (req, res, next) => {
       fullPageList: project.pages,
       hasReference: Boolean(request.referenceImage),
     })
+    const editInstruction = typeof request.editInstruction === 'string' ? request.editInstruction.trim() : ''
+    if (editInstruction && !request.referenceImage) {
+      res.status(400).json({ error: '调整图片需要参考图' })
+      return
+    }
+    const prompt = editInstruction
+      ? [
+        basePrompt,
+        '',
+        '这是一次基于已生成图片的局部/整体调整。',
+        '请保留参考图中的主体内容、画面比例、主要文字信息和整体版式，只根据用户调整需求修改。',
+        '',
+        '用户调整需求：',
+        editInstruction,
+      ].join('\n')
+      : basePrompt
 
     const result = await callImageApi({
       prompt,

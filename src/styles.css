@@ -181,6 +181,37 @@ textarea:focus-visible {
   margin-top: 18px;
 }
 
+.adjust-modal {
+  display: grid;
+  gap: 14px;
+}
+
+.adjust-preview {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  padding: 10px;
+}
+
+.adjust-preview img {
+  width: 96px;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #efe3d6;
+}
+
+.adjust-preview strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  line-height: 1.35;
+}
+
 .config-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

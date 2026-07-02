@@ -86,6 +86,7 @@ export interface GenerateImageRequest {
   project: XhsProject
   page: XhsPage
   referenceImage?: string
+  editInstruction?: string
 }
 
 export interface GenerateImageResponse {

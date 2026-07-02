@@ -95,6 +95,7 @@ interface ImageQueueTask {
   project: XhsProject
   page: XhsPage
   referenceImage?: ImageReferenceResolver
+  editInstruction?: string
   controller: AbortController
   resolve: (image: string | null) => void
 }
@@ -424,6 +425,8 @@ export default function App() {
   const [envMessage, setEnvMessage] = useState('')
   const [referenceImage, setReferenceImage] = useState('')
   const [referenceImageName, setReferenceImageName] = useState('')
+  const [adjustPageId, setAdjustPageId] = useState('')
+  const [adjustInstruction, setAdjustInstruction] = useState('')
   const workspaceRef = useRef<Record<ProjectMode, ModeWorkspace>>({
     xhs: createModeWorkspace('xhs'),
     taobao: createModeWorkspace('taobao'),
@@ -629,7 +632,10 @@ export default function App() {
     try {
       const image = task.controller.signal.aborted
         ? null
-        : await generatePageImage(task.project, task.page, resolveImageReference(task.referenceImage), task.controller.signal)
+        : await generatePageImage(task.project, task.page, {
+          referenceImage: resolveImageReference(task.referenceImage),
+          editInstruction: task.editInstruction,
+        }, task.controller.signal)
       task.resolve(image)
     } finally {
       activeImageTasksRef.current.delete(task.id)
@@ -668,7 +674,11 @@ export default function App() {
     }
   }
 
-  function enqueueImageGeneration(projectToQueue: XhsProject, page: XhsPage, referenceImage?: ImageReferenceResolver): Promise<string | null> {
+  function enqueueImageGeneration(
+    projectToQueue: XhsProject,
+    page: XhsPage,
+    options: { referenceImage?: ImageReferenceResolver; editInstruction?: string } = {},
+  ): Promise<string | null> {
     const cleanProject = {
       ...projectToQueue,
       config: normalizeConfig(projectToQueue.config),
@@ -686,7 +696,8 @@ export default function App() {
         mode: operationMode,
         project: cleanProject,
         page,
-        referenceImage,
+        referenceImage: options.referenceImage,
+        editInstruction: options.editInstruction,
         controller: new AbortController(),
         resolve,
       })
@@ -702,21 +713,9 @@ export default function App() {
       ...targetProject,
       config: normalizeConfig(targetProject.config),
     }
-    const operationMode = cleanProject.config.mode
-    const productReference = operationMode === 'taobao' ? workspaceRef.current[operationMode].referenceImage : ''
-    const cover = cleanProject.pages[0]
 
     setError('')
-    return cleanProject.pages.map((page) => {
-      const reference = () => {
-        if (page.id === cover?.id) return productReference || undefined
-        const coverImage = cover ? imagesRef.current[operationMode]?.[cover.id] : undefined
-        return operationMode === 'taobao'
-          ? productReference || (cleanProject.config.useCoverReference ? coverImage : undefined)
-          : cleanProject.config.useCoverReference ? coverImage : undefined
-      }
-      return enqueueImageGeneration(cleanProject, page, reference)
-    })
+    return cleanProject.pages.map((page) => enqueueImageGeneration(cleanProject, page))
   }
 
   function stopImagePool() {
@@ -767,6 +766,10 @@ export default function App() {
   const selectedPage = useMemo(() => {
     return project?.pages.find((page) => page.id === selectedPageId) ?? project?.pages[0] ?? null
   }, [project, selectedPageId])
+
+  const adjustPage = useMemo(() => {
+    return project?.pages.find((page) => page.id === adjustPageId) ?? null
+  }, [adjustPageId, project])
 
   const previewPage = useMemo(() => {
     return project?.pages.find((page) => page.id === previewPageId) ?? null
@@ -965,7 +968,12 @@ export default function App() {
     }
   }
 
-  async function generatePageImage(targetProject: XhsProject, page: XhsPage, referenceImage?: string, signal?: AbortSignal): Promise<string | null> {
+  async function generatePageImage(
+    targetProject: XhsProject,
+    page: XhsPage,
+    options: { referenceImage?: string; editInstruction?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<string | null> {
     const cleanProject = {
       ...targetProject,
       config: normalizeConfig(targetProject.config),
@@ -974,7 +982,12 @@ export default function App() {
     setPageStatusForMode(operationMode, (current) => ({ ...current, [page.id]: 'loading' }))
     setPageErrorsForMode(operationMode, (current) => ({ ...current, [page.id]: '' }))
     try {
-      const response = await generateImage({ project: cleanProject, page, referenceImage }, { signal })
+      const response = await generateImage({
+        project: cleanProject,
+        page,
+        referenceImage: options.referenceImage,
+        editInstruction: options.editInstruction,
+      }, { signal })
       if (signal?.aborted) return null
       const nextImages = setImagesForMode(operationMode, (current) => ({ ...current, [page.id]: response.image }))
       setPageStatusForMode(operationMode, (current) => ({ ...current, [page.id]: 'done' }))
@@ -1136,21 +1149,47 @@ export default function App() {
     await persistProjectSnapshot(saved.project)
   }
 
-  async function generateSelectedPage() {
+  function generateSelectedImage() {
     const saved = saveSelectedDraft({ clearImage: false })
     if (!saved) return
-    const operationMode = saved.project.config.mode
-    const workspace = workspaceRef.current[operationMode]
-    const cover = saved.project.pages[0]
-    const reference = () => {
-      const coverImage = cover ? imagesRef.current[operationMode]?.[cover.id] : undefined
-      return operationMode === 'taobao'
-        ? workspace.referenceImage || (saved.project.config.useCoverReference && saved.page.index > 0 ? coverImage : undefined)
-        : saved.project.config.useCoverReference && saved.page.index > 0
-          ? coverImage
-          : undefined
+    void enqueueImageGeneration(saved.project, saved.page)
+  }
+
+  function openAdjustImageDialog() {
+    if (!selectedPage || !images[selectedPage.id]) return
+    setAdjustPageId(selectedPage.id)
+    setAdjustInstruction('')
+    setError('')
+  }
+
+  function closeAdjustImageDialog() {
+    setAdjustPageId('')
+    setAdjustInstruction('')
+  }
+
+  function submitAdjustImage() {
+    const cleanInstruction = adjustInstruction.trim()
+    if (!cleanInstruction) {
+      setError('请输入调整需求')
+      return
     }
-    void enqueueImageGeneration(saved.project, saved.page, reference)
+    const saved = saveSelectedDraft({ clearImage: false })
+    if (!saved) return
+    const targetPage = saved.project.pages.find((page) => page.id === adjustPageId)
+    if (!targetPage) return
+
+    const operationMode = saved.project.config.mode
+    const sourceImage = imagesRef.current[operationMode]?.[targetPage.id] ?? images[targetPage.id]
+    if (!sourceImage) {
+      setError('当前页还没有可调整的图片')
+      return
+    }
+
+    void enqueueImageGeneration(saved.project, targetPage, {
+      referenceImage: sourceImage,
+      editInstruction: cleanInstruction,
+    })
+    closeAdjustImageDialog()
   }
 
   async function generateAllFromCurrentProject() {
@@ -1261,6 +1300,52 @@ export default function App() {
                   保存配置
                 </button>
               </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {adjustPage && images[adjustPage.id] && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeAdjustImageDialog}>
+          <section className="config-modal adjust-modal" aria-label="调整图片" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-heading-row">
+              <div className="panel-title">
+                <WandSparkles size={20} aria-hidden="true" />
+                <h2>调整图片</h2>
+              </div>
+              <button className="icon-button" type="button" onClick={closeAdjustImageDialog} aria-label="关闭调整图片">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="adjust-preview">
+              <img src={images[adjustPage.id]} alt={adjustPage.headline} />
+              <div>
+                <p className="eyebrow">{pageTypeLabel(adjustPage.type, mode)} / {adjustPage.index + 1}</p>
+                <strong>{adjustPage.headline}</strong>
+              </div>
+            </div>
+
+            <label className="field-block">
+              <span>调整需求</span>
+              <textarea
+                className="content-editor"
+                rows={5}
+                value={adjustInstruction}
+                onChange={(event) => setAdjustInstruction(event.target.value)}
+                placeholder="例如：把标题放大，整体更清爽，背景减少装饰，保留主体内容"
+                autoFocus
+              />
+            </label>
+
+            <div className="button-row">
+              <button className="secondary-button" type="button" onClick={closeAdjustImageDialog}>
+                取消
+              </button>
+              <button className="primary-button" type="button" onClick={submitAdjustImage} disabled={!adjustInstruction.trim() || pageStatus[adjustPage.id] === 'loading'}>
+                {pageStatus[adjustPage.id] === 'loading' ? <Loader2 className="spin" size={18} /> : <WandSparkles size={18} />}
+                开始调整
+              </button>
             </div>
           </section>
         </div>
@@ -1559,10 +1644,16 @@ export default function App() {
                       <Save size={17} />
                       保存
                     </button>
-                    <button type="button" onClick={generateSelectedPage} disabled={Boolean(busy) || pageStatus[selectedPage.id] === 'loading'}>
-                      {pageStatus[selectedPage.id] === 'loading' ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />}
-                      生成当前页
+                    <button type="button" onClick={generateSelectedImage} disabled={Boolean(busy) || pageStatus[selectedPage.id] === 'loading'}>
+                      {pageStatus[selectedPage.id] === 'loading' ? <Loader2 className="spin" size={17} /> : <ImageIcon size={17} />}
+                      生成图片
                     </button>
+                    {images[selectedPage.id] && (
+                      <button type="button" onClick={openAdjustImageDialog} disabled={Boolean(busy) || pageStatus[selectedPage.id] === 'loading'}>
+                        <WandSparkles size={17} />
+                        调整图片
+                      </button>
+                    )}
                     <button type="button" onClick={() => copyText(pageDraft.imagePrompt)}>
                       <Copy size={17} />
                       复制提示词
