@@ -38,11 +38,12 @@ export function exportProjectZip(project: XhsProject, images: Record<string, str
   }
 
   for (const page of project.pages) {
+    const prefix = `${String(page.index + 1).padStart(2, '0')}-${page.type}`
+    payload[`prompts/${prefix}.txt`] = strToU8(page.imagePrompt)
+
     const image = images[page.id]
     if (!image) continue
-    const prefix = `${String(page.index + 1).padStart(2, '0')}-${page.type}`
     payload[`images/${prefix}.${extFromDataUrl(image)}`] = dataUrlToBytes(image)
-    payload[`prompts/${prefix}.txt`] = strToU8(page.imagePrompt)
   }
 
   return new Blob([zipSync(payload)], { type: 'application/zip' })

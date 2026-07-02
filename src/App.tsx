@@ -413,6 +413,10 @@ export default function App() {
     xhs: createModeWorkspace('xhs'),
     taobao: createModeWorkspace('taobao'),
   })
+  const imagesRef = useRef<Record<ProjectMode, Record<string, string>>>({
+    xhs: {},
+    taobao: {},
+  })
   const activeModeRef = useRef<ProjectMode>('xhs')
   const activeGenerationRef = useRef<{ controller: AbortController; mode: ProjectMode; kind: BusyState } | null>(null)
 
@@ -456,7 +460,7 @@ export default function App() {
       topic,
       config: normalizeConfig(config),
       project,
-      images,
+      images: imagesRef.current[mode] ?? images,
       pageStatus,
       pageErrors,
       selectedPageId,
@@ -471,6 +475,7 @@ export default function App() {
       ...workspaceRef.current[targetMode],
       ...patch,
     }
+    if ('images' in patch) imagesRef.current[targetMode] = next.images
     workspaceRef.current[targetMode] = next
 
     if (activeModeRef.current !== targetMode) return
@@ -492,6 +497,7 @@ export default function App() {
       config: normalizeConfig(snapshot.config),
     }
     activeModeRef.current = targetMode
+    imagesRef.current[targetMode] = next.images
     workspaceRef.current[targetMode] = next
     setTopic(next.topic)
     setConfig(next.config)
@@ -527,7 +533,8 @@ export default function App() {
   }
 
   function setImagesForMode(targetMode: ProjectMode, updater: (current: Record<string, string>) => Record<string, string>): Record<string, string> {
-    const nextImages = updater(workspaceRef.current[targetMode].images)
+    const nextImages = updater(imagesRef.current[targetMode] ?? workspaceRef.current[targetMode].images)
+    imagesRef.current[targetMode] = nextImages
     patchWorkspace(targetMode, { images: nextImages })
     return nextImages
   }
@@ -734,7 +741,7 @@ export default function App() {
       config: normalizeConfig(targetProject.config),
     }
     const operationMode = cleanProject.config.mode
-    const saved = await rememberProject(toSavedProject(cleanProject, imageSnapshot ?? workspaceRef.current[operationMode].images))
+    const saved = await rememberProject(toSavedProject(cleanProject, imageSnapshot ?? imagesRef.current[operationMode] ?? workspaceRef.current[operationMode].images))
     setHistory(saved)
   }
 
@@ -950,7 +957,8 @@ export default function App() {
     const saved = saveSelectedDraft({ clearImage: false })
     const currentProject = saved?.project ?? project
     if (!currentProject) return
-    const blob = exportProjectZip(currentProject, images)
+    const operationMode = currentProject.config.mode ?? mode
+    const blob = exportProjectZip(currentProject, imagesRef.current[operationMode] ?? workspaceRef.current[operationMode].images)
     downloadBlob(blob, `${currentProject.topic.slice(0, 18) || 'red-image-studio'}.zip`)
   }
 
