@@ -1852,7 +1852,7 @@ export default function App() {
               onClick={() => switchMode('xhs')}
             >
               <Sparkles size={18} />
-              小红书图文
+              小红书
             </button>
             <button
               className={classNames(studioMode === 'taobao' && 'active')}
@@ -1860,7 +1860,7 @@ export default function App() {
               onClick={() => switchMode('taobao')}
             >
               <ShoppingBag size={18} />
-              淘宝宣传图
+              淘宝
             </button>
             <button
               className={classNames(studioMode === 'single' && 'active')}
@@ -1868,7 +1868,7 @@ export default function App() {
               onClick={openSingleMode}
             >
               <ImageIcon size={18} />
-              单图生成
+              文生图
             </button>
           </div>
 
