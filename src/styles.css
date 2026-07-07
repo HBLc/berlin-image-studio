@@ -588,6 +588,53 @@ button:disabled {
   gap: 14px;
 }
 
+.single-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.single-mode-toggle button {
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  color: var(--muted);
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.single-mode-toggle button.active {
+  border-color: rgba(31, 122, 91, 0.34);
+  background: #e9f2ed;
+  color: #15563f;
+  box-shadow: 0 0 0 3px rgba(31, 122, 91, 0.1);
+}
+
+.competition-count-row {
+  display: grid;
+  grid-template-columns: 1fr 72px auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  padding: 7px 10px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.competition-count-row input {
+  min-height: 34px;
+  border-radius: 6px;
+  padding: 4px 6px;
+  text-align: center;
+}
+
 .single-composer .field-block,
 .single-detail-stack .field-block {
   margin-bottom: 0;

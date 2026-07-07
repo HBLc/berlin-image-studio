@@ -43,6 +43,9 @@ const SINGLE_DEFAULT_PROMPT = '一只透明玻璃杯放在浅色桌面上，柔�
 const SINGLE_IMAGE_SIZE = '1024x1024'
 const SINGLE_IMAGE_QUALITY = 'medium'
 const SINGLE_IMAGE_FORMAT = 'png'
+const COMPETITION_IMAGE_COUNT_MIN = 1
+const COMPETITION_IMAGE_COUNT_MAX = 10
+const COMPETITION_IMAGE_COUNT_DEFAULT = 4
 const XHS_DEFAULT_AUDIENCE = '想提升内容质感的新手创作者'
 const TAOBAO_DEFAULT_AUDIENCE = '有明确购买需求的淘宝用户'
 const IMAGE_POOL_SIZE = 2
@@ -127,6 +130,26 @@ function downloadDataUrl(dataUrl: string, filename: string) {
   anchor.click()
 }
 
+function waitWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    let timer = 0
+    const abort = () => {
+      window.clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
 function copyText(value: string) {
   void navigator.clipboard.writeText(value)
 }
@@ -140,6 +163,11 @@ function pageBounds(mode: ProjectMode): { min: number; max: number; defaultValue
 function clampPageCount(value: number, mode: ProjectMode): number {
   const bounds = pageBounds(mode)
   return Math.min(bounds.max, Math.max(bounds.min, value))
+}
+
+function clampCompetitionImageCount(value: number): number {
+  if (!Number.isFinite(value)) return COMPETITION_IMAGE_COUNT_DEFAULT
+  return Math.min(COMPETITION_IMAGE_COUNT_MAX, Math.max(COMPETITION_IMAGE_COUNT_MIN, Math.trunc(value)))
 }
 
 function normalizeConfig(value: StudioConfig): StudioConfig {
@@ -467,7 +495,7 @@ function statusLabel(status: PageStatus): string {
 
 function historyModeLabel(value: StudioMode): string {
   if (value === 'taobao') return '淘宝历史'
-  if (value === 'single') return '单图历史'
+  if (value === 'single') return '文生图历史'
   return '小红书历史'
 }
 
@@ -507,14 +535,18 @@ export default function App() {
   const [studioMode, setStudioMode] = useState<StudioMode>('xhs')
   const [historyLimit, setHistoryLimit] = useState(getHistoryLimit())
   const [singlePrompt, setSinglePrompt] = useState(SINGLE_DEFAULT_PROMPT)
+  const [singleCompetitionMode, setSingleCompetitionMode] = useState(false)
+  const [competitionImageCount, setCompetitionImageCount] = useState(COMPETITION_IMAGE_COUNT_DEFAULT)
   const [singleReferenceImage, setSingleReferenceImage] = useState('')
   const [singleReferenceImageName, setSingleReferenceImageName] = useState('')
   const [singleImageResults, setSingleImageResults] = useState<SavedSingleImage[]>([])
+  const [singleHistory, setSingleHistory] = useState<SavedSingleImage[]>([])
   const [singleSelectedImageId, setSingleSelectedImageId] = useState('')
   const [singlePreviewImageId, setSinglePreviewImageId] = useState('')
   const [singleStatus, setSingleStatus] = useState<SingleImageStatus>('idle')
   const [singleError, setSingleError] = useState('')
   const [singleEditInstruction, setSingleEditInstruction] = useState('')
+  const [singleGenerationProgress, setSingleGenerationProgress] = useState({ current: 0, total: 0 })
   const singleImageControllerRef = useRef<AbortController | null>(null)
   const workspaceRef = useRef<Record<ProjectMode, ModeWorkspace>>({
     xhs: createModeWorkspace('xhs'),
@@ -544,6 +576,7 @@ export default function App() {
     })
     void loadSingleHistory().then((items) => {
       setSingleImageResults(items)
+      setSingleHistory(items)
       setSingleSelectedImageId(items[0]?.id ?? '')
     })
   }, [])
@@ -589,6 +622,17 @@ export default function App() {
     return singlePreviewableImages.findIndex((item) => item.id === singlePreviewImageId)
   }, [singlePreviewImageId, singlePreviewableImages])
   const canNavigateSinglePreview = singlePreviewableImages.length > 1
+  const singlePromptLabel = singleCompetitionMode ? '比赛要求' : '图片提示词'
+  const singlePromptPlaceholder = singleCompetitionMode
+    ? '粘贴比赛主题、画面规格、必须包含的元素、禁止事项和评审偏好'
+    : SINGLE_DEFAULT_PROMPT
+  const singleGenerateButtonText = isSingleBusy
+    ? singleGenerationProgress.total > 1
+      ? `生成中 ${singleGenerationProgress.current}/${singleGenerationProgress.total}`
+      : '生成中'
+    : singleCompetitionMode
+      ? '生成比赛图'
+      : '生成图片'
 
   function currentWorkspaceSnapshot(): ModeWorkspace {
     return {
@@ -1120,11 +1164,45 @@ export default function App() {
     }
   }
 
+  function singleImageModeLabel(item: SavedSingleImage): string {
+    if (item.mode === 'edit') return '调整图片'
+    if (item.mode === 'competition') return '比赛图'
+    return '生成图片'
+  }
+
+  function singleImageSourceLabel(item: SavedSingleImage): string {
+    if (item.mode === 'edit') return '调整结果'
+    if (item.mode === 'competition') return '比赛模式'
+    return item.referenceName ? '参考图生成' : '文生图'
+  }
+
+  function singleImageTitle(item: SavedSingleImage): string {
+    if (item.mode !== 'competition') return item.prompt
+    const [, requirement] = item.prompt.match(/比赛要求：\n([\s\S]*?)\n\n生成要求：/) ?? []
+    return requirement?.trim() || item.prompt
+  }
+
+  function buildSinglePromptText(value: string, competitionMode: boolean, sequence?: { index: number; total: number }): string {
+    if (!competitionMode) return value
+    return [
+      '请根据以下比赛要求生成一张参赛图片。',
+      sequence && sequence.total > 1 ? `这是第 ${sequence.index} 张候选方案，共 ${sequence.total} 张。每张都要有不同构图或视觉创意。` : '',
+      '',
+      '比赛要求：',
+      value,
+      '',
+      '生成要求：',
+      '- 画面必须完整满足比赛要求。',
+      '- 视觉完成度高，主体清晰，构图明确。',
+      '- 不要生成水印、二维码、平台 UI、版权标识或无关文字。',
+    ].filter(Boolean).join('\n')
+  }
+
   async function generateSingleImage() {
     if (isSingleBusy || isImageBusy) return
-    const cleanPrompt = singlePrompt.trim()
-    if (!cleanPrompt) {
-      setSingleError('请输入图片提示词')
+    const cleanInput = singlePrompt.trim()
+    if (!cleanInput) {
+      setSingleError(singleCompetitionMode ? '请输入比赛要求' : '请输入图片提示词')
       return
     }
 
@@ -1138,40 +1216,55 @@ export default function App() {
     const requestOutputFormat = SINGLE_IMAGE_FORMAT
     const requestReferenceImage = singleReferenceImage
     const requestReferenceName = singleReferenceImageName
-
-    const { project: singleProject, page } = createSingleImageProject({
-      prompt: cleanPrompt,
-      size: requestSize,
-      quality: requestQuality,
-      outputFormat: requestOutputFormat,
-    })
+    const requestCompetitionMode = singleCompetitionMode
+    const requestCount = requestCompetitionMode ? clampCompetitionImageCount(competitionImageCount) : 1
+    let lastRequestStartedAt = 0
+    setSingleGenerationProgress({ current: 0, total: requestCount })
 
     try {
-      const response = await generateImage({
-        project: singleProject,
-        page,
-        referenceImage: requestReferenceImage || undefined,
-      }, { signal: controller.signal })
-      if (controller.signal.aborted) return
+      for (let index = 1; index <= requestCount; index += 1) {
+        if (controller.signal.aborted) return
+        const waitMs = lastRequestStartedAt > 0
+          ? Math.max(0, IMAGE_REQUEST_GAP_MS - (Date.now() - lastRequestStartedAt))
+          : 0
+        await waitWithAbort(waitMs, controller.signal)
+        setSingleGenerationProgress({ current: index, total: requestCount })
+        const prompt = buildSinglePromptText(cleanInput, requestCompetitionMode, { index, total: requestCount })
+        const { project: singleProject, page } = createSingleImageProject({
+          prompt,
+          size: requestSize,
+          quality: requestQuality,
+          outputFormat: requestOutputFormat,
+        })
+        lastRequestStartedAt = Date.now()
+        const response = await generateImage({
+          project: singleProject,
+          page,
+          referenceImage: requestReferenceImage || undefined,
+        }, { signal: controller.signal })
+        if (controller.signal.aborted) return
 
-      const nextResult = createSingleResult({
-        image: response.image,
-        prompt: cleanPrompt,
-        referenceName: requestReferenceName || undefined,
-        size: requestSize,
-        quality: requestQuality,
-        outputFormat: requestOutputFormat,
-        mode: 'generate',
-      })
-      const saved = await rememberSingleImage(nextResult)
-      setSingleImageResults(saved)
-      setSingleSelectedImageId(nextResult.id)
+        const nextResult = createSingleResult({
+          image: response.image,
+          prompt,
+          referenceName: requestReferenceName || undefined,
+          size: requestSize,
+          quality: requestQuality,
+          outputFormat: requestOutputFormat,
+          mode: requestCompetitionMode ? 'competition' : 'generate',
+        })
+        const saved = await rememberSingleImage(nextResult)
+        setSingleHistory(saved)
+        setSingleImageResults((current) => [nextResult, ...current.filter((item) => item.id !== nextResult.id)])
+        setSingleSelectedImageId(nextResult.id)
+      }
       setSingleStatus('done')
     } catch (err) {
       if (controller.signal.aborted || isAbortError(err)) return
       setSingleStatus('error')
       setSingleError(err instanceof Error ? err.message : String(err))
     } finally {
+      setSingleGenerationProgress({ current: 0, total: 0 })
       if (singleImageControllerRef.current === controller) singleImageControllerRef.current = null
     }
   }
@@ -1225,7 +1318,8 @@ export default function App() {
         mode: 'edit',
       })
       const saved = await rememberSingleImage(nextResult)
-      setSingleImageResults(saved)
+      setSingleHistory(saved)
+      setSingleImageResults((current) => [nextResult, ...current.filter((item) => item.id !== nextResult.id)])
       setSingleSelectedImageId(nextResult.id)
       setSingleEditInstruction('')
       setSingleStatus('done')
@@ -1245,14 +1339,23 @@ export default function App() {
     singleImageControllerRef.current = null
     setSingleStatus('idle')
     setSingleError('已停止生成')
+    setSingleGenerationProgress({ current: 0, total: 0 })
   }
 
   async function resetSingleWorkspace() {
-    if (!singlePrompt.trim() && !singleReferenceImage && singleImageResults.length === 0) return
-    if (!window.confirm('清空当前单图提示词、参考图和生成结果？')) return
+    if (
+      !singlePrompt.trim()
+      && !singleReferenceImage
+      && singleImageResults.length === 0
+      && !singleCompetitionMode
+      && competitionImageCount === COMPETITION_IMAGE_COUNT_DEFAULT
+    ) return
+    if (!window.confirm('清空当前文生图提示词、参考图和生成结果？')) return
     singleImageControllerRef.current?.abort()
     singleImageControllerRef.current = null
     setSinglePrompt('')
+    setSingleCompetitionMode(false)
+    setCompetitionImageCount(COMPETITION_IMAGE_COUNT_DEFAULT)
     setSingleReferenceImage('')
     setSingleReferenceImageName('')
     setSingleImageResults([])
@@ -1261,7 +1364,7 @@ export default function App() {
     setSingleEditInstruction('')
     setSingleStatus('idle')
     setSingleError('')
-    await clearSingleHistory()
+    setSingleGenerationProgress({ current: 0, total: 0 })
   }
 
   function openSinglePreview(imageId: string) {
@@ -1455,16 +1558,13 @@ export default function App() {
   }
 
   async function deleteSingleSaved(id: string) {
-    const next = await saveSingleHistory(singleImageResults.filter((item) => item.id !== id))
-    setSingleImageResults(next)
-    setSingleSelectedImageId((current) => current === id ? next[0]?.id ?? '' : current)
+    const next = await saveSingleHistory(singleHistory.filter((item) => item.id !== id))
+    setSingleHistory(next)
   }
 
   async function clearSingleSaved() {
     await clearSingleHistory()
-    setSingleImageResults([])
-    setSingleSelectedImageId('')
-    setSinglePreviewImageId('')
+    setSingleHistory([])
   }
 
   async function changeHistoryLimit(value: number) {
@@ -1472,13 +1572,22 @@ export default function App() {
     setHistoryLimit(nextLimit)
     if (studioMode === 'single') {
       const nextSingles = await loadSingleHistory()
-      setSingleImageResults(nextSingles)
-      setSingleSelectedImageId((current) => current && nextSingles.some((item) => item.id === current) ? current : nextSingles[0]?.id ?? '')
+      setSingleHistory(nextSingles)
+      if (singleImageResults.length === 0) {
+        setSingleImageResults(nextSingles)
+        setSingleSelectedImageId(nextSingles[0]?.id ?? '')
+      }
       return
     }
 
     const nextHistory = await loadHistory(mode)
     setHistory(nextHistory)
+  }
+
+  function loadSingleSaved(item: SavedSingleImage) {
+    setSingleImageResults((current) => [item, ...current.filter((result) => result.id !== item.id)])
+    setSingleSelectedImageId(item.id)
+    setSingleError('')
   }
 
   function resetCurrentProject() {
@@ -1798,14 +1907,14 @@ export default function App() {
       )}
 
       {singlePreviewImage && (
-        <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="单图预览" onMouseDown={closeSinglePreview}>
+        <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="文生图预览" onMouseDown={closeSinglePreview}>
           <section className="lightbox-panel" onMouseDown={(event) => event.stopPropagation()}>
             <div className="lightbox-header">
               <div>
                 <p className="eyebrow">
-                  单图 / {singlePreviewPosition >= 0 ? `${singlePreviewPosition + 1}/${singlePreviewableImages.length}` : '预览'}
+                  文生图 / {singlePreviewPosition >= 0 ? `${singlePreviewPosition + 1}/${singlePreviewableImages.length}` : '预览'}
                 </p>
-                <h2>{singlePreviewImage.mode === 'edit' ? '调整结果' : '生成结果'}</h2>
+                <h2>{singleImageSourceLabel(singlePreviewImage)}</h2>
               </div>
               <div className="lightbox-actions">
                 <button type="button" aria-pressed={isPreviewActualSize} onClick={() => setIsPreviewActualSize((value) => !value)}>
@@ -1874,15 +1983,50 @@ export default function App() {
 
           {studioMode === 'single' ? (
             <div className="single-composer">
+              <div className="single-mode-toggle" aria-label="文生图模式">
+                <button
+                  className={classNames(!singleCompetitionMode && 'active')}
+                  type="button"
+                  onClick={() => setSingleCompetitionMode(false)}
+                  disabled={isSingleBusy}
+                >
+                  普通生成
+                </button>
+                <button
+                  className={classNames(singleCompetitionMode && 'active')}
+                  type="button"
+                  onClick={() => setSingleCompetitionMode(true)}
+                  disabled={isSingleBusy}
+                >
+                  比赛模式
+                </button>
+              </div>
+
               <label className="field-block">
-                <span>图片提示词</span>
+                <span>{singlePromptLabel}</span>
                 <textarea
                   value={singlePrompt}
                   onChange={(event) => setSinglePrompt(event.target.value)}
                   rows={8}
-                  placeholder={SINGLE_DEFAULT_PROMPT}
+                  placeholder={singlePromptPlaceholder}
                 />
               </label>
+
+              {singleCompetitionMode && (
+                <label className="competition-count-row" htmlFor="competition-image-count">
+                  <span>生成数量</span>
+                  <input
+                    id="competition-image-count"
+                    type="number"
+                    min={COMPETITION_IMAGE_COUNT_MIN}
+                    max={COMPETITION_IMAGE_COUNT_MAX}
+                    value={competitionImageCount}
+                    onChange={(event) => setCompetitionImageCount(clampCompetitionImageCount(Number(event.target.value)))}
+                    disabled={isSingleBusy}
+                  />
+                  <span>张</span>
+                </label>
+              )}
 
               <div className="reference-upload">
                 <div className="mini-heading">
@@ -1918,11 +2062,11 @@ export default function App() {
               <div className="button-row">
                 <button className="primary-button" type="button" onClick={() => void generateSingleImage()} disabled={isSingleBusy || isImageBusy}>
                   {isSingleBusy ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
-                  生成图片
+                  {singleGenerateButtonText}
                 </button>
                 <button className="reset-button" type="button" onClick={() => void resetSingleWorkspace()} disabled={isSingleBusy}>
                   <Trash2 size={18} />
-                  清空
+                  重置
                 </button>
                 {isSingleBusy && (
                   <button className="stop-button" type="button" onClick={stopSingleImage}>
@@ -2065,13 +2209,19 @@ export default function App() {
           <div className="panel-heading-row">
             <div className="panel-title">
               <ImageIcon size={20} aria-hidden="true" />
-              <h2>{studioMode === 'single' ? '单图' : '页面'}</h2>
+              <h2>{studioMode === 'single' ? '文生图' : '页面'}</h2>
             </div>
             <div className="count-label">
               {studioMode === 'single' ? (
                 <>
                   <span>{singleImageResults.length} 张</span>
-                  {isSingleBusy && <span>生成中</span>}
+                  {isSingleBusy && (
+                    <span>
+                      {singleGenerationProgress.total > 1
+                        ? `${singleGenerationProgress.current}/${singleGenerationProgress.total}`
+                        : '生成中'}
+                    </span>
+                  )}
                 </>
               ) : (
                 <>
@@ -2091,7 +2241,7 @@ export default function App() {
                     <span className="zoom-affordance"><Maximize2 size={17} /></span>
                   </button>
                   <div className="single-hero-meta">
-                    <span>{selectedSingleImage.mode === 'edit' ? '调整结果' : selectedSingleImage.referenceName ? '参考图生成' : '文生图'}</span>
+                    <span>{singleImageSourceLabel(selectedSingleImage)}</span>
                     {selectedSingleImage.referenceName && <span>{selectedSingleImage.referenceName}</span>}
                   </div>
                 </div>
@@ -2103,7 +2253,7 @@ export default function App() {
               ) : (
                 <div className="empty-state">
                   <ImageIcon size={42} aria-hidden="true" />
-                  <p>输入提示词后生成图片</p>
+                  <p>{singleCompetitionMode ? '输入比赛要求后生成图片' : '输入提示词后生成图片'}</p>
                 </div>
               )}
 
@@ -2124,7 +2274,7 @@ export default function App() {
                         <span className="zoom-affordance"><Maximize2 size={17} /></span>
                       </div>
                       <div className="single-result-meta">
-                        <strong>{item.mode === 'edit' ? '调整图片' : '生成图片'}</strong>
+                        <strong>{singleImageModeLabel(item)}</strong>
                         <span>{new Date(item.createdAt).toLocaleString()}</span>
                       </div>
                     </button>
@@ -2381,7 +2531,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => studioMode === 'single' ? void clearSingleSaved() : void clearSaved()}
-                disabled={studioMode === 'single' ? !singleImageResults.length : !history.length}
+                disabled={studioMode === 'single' ? !singleHistory.length : !history.length}
               >
                 <Trash2 size={15} />清空
               </button>
@@ -2401,12 +2551,12 @@ export default function App() {
             <div className="history-list">
               {studioMode === 'single' ? (
                 <>
-                  {singleImageResults.length === 0 && <p className="muted">暂无记录</p>}
-                  {singleImageResults.map((item) => (
+                  {singleHistory.length === 0 && <p className="muted">暂无记录</p>}
+                  {singleHistory.map((item) => (
                     <div className="history-item" key={item.id}>
-                      <button type="button" onClick={() => setSingleSelectedImageId(item.id)}>
-                        <strong>{item.prompt}</strong>
-                        <span>{item.mode === 'edit' ? '调整图片' : '生成图片'} / {new Date(item.createdAt).toLocaleString()}</span>
+                      <button type="button" onClick={() => loadSingleSaved(item)}>
+                        <strong>{singleImageTitle(item)}</strong>
+                        <span>{singleImageModeLabel(item)} / {new Date(item.createdAt).toLocaleString()}</span>
                       </button>
                       <button className="icon-button danger" type="button" aria-label="删除历史" onClick={() => void deleteSingleSaved(item.id)}>
                         <Trash2 size={16} />

@@ -130,5 +130,5 @@ export interface SavedSingleImage {
   size: string
   quality: ImageQuality
   outputFormat: ImageFormat
-  mode: 'generate' | 'edit'
+  mode: 'generate' | 'competition' | 'edit'
 }
