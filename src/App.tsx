@@ -97,6 +97,7 @@ interface ModeWorkspace {
   referenceImage: string
   referenceImageName: string
   settingsReady: boolean
+  positioningTouched: boolean
 }
 
 interface ImageQueueTask {
@@ -211,6 +212,7 @@ function createModeWorkspace(mode: ProjectMode): ModeWorkspace {
     referenceImage: '',
     referenceImageName: '',
     settingsReady: false,
+    positioningTouched: false,
   }
 }
 
@@ -521,7 +523,8 @@ export default function App() {
   const [queuedImageCount, setQueuedImageCount] = useState(0)
   const [error, setError] = useState('')
   const [settingsReady, setSettingsReady] = useState(false)
-  const [settingsPromptAction, setSettingsPromptAction] = useState<PendingSettingsAction | null>(null)
+  const [positioningTouched, setPositioningTouched] = useState(false)
+  const [autoFillPositioning, setAutoFillPositioning] = useState(true)
   const [showConfig, setShowConfig] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
   const [envConfig, setEnvConfig] = useState<EnvConfig>(emptyEnvConfig)
@@ -648,6 +651,7 @@ export default function App() {
       referenceImage,
       referenceImageName,
       settingsReady,
+      positioningTouched,
     }
   }
 
@@ -671,6 +675,7 @@ export default function App() {
     if ('referenceImage' in patch) setReferenceImage(next.referenceImage)
     if ('referenceImageName' in patch) setReferenceImageName(next.referenceImageName)
     if ('settingsReady' in patch) setSettingsReady(next.settingsReady)
+    if ('positioningTouched' in patch) setPositioningTouched(next.positioningTouched)
   }
 
   function applyWorkspace(targetMode: ProjectMode, snapshot: ModeWorkspace) {
@@ -695,17 +700,18 @@ export default function App() {
     setReferenceImage(next.referenceImage)
     setReferenceImageName(next.referenceImageName)
     setSettingsReady(next.settingsReady)
-    setSettingsPromptAction(null)
+    setPositioningTouched(next.positioningTouched)
     setError('')
   }
 
   function updateTopic(value: string) {
     setTopic(value)
     setSettingsReady(false)
-    setSettingsPromptAction(null)
+    setPositioningTouched(false)
     patchWorkspace(mode, {
       topic: value,
       settingsReady: false,
+      positioningTouched: false,
     })
   }
 
@@ -713,6 +719,18 @@ export default function App() {
     const normalized = normalizeConfig(nextConfig)
     setConfig(normalized)
     patchWorkspace(normalized.mode, { config: normalized })
+  }
+
+  function updatePositioningConfig(nextConfig: StudioConfig) {
+    const normalized = normalizeConfig(nextConfig)
+    setConfig(normalized)
+    setSettingsReady(true)
+    setPositioningTouched(true)
+    patchWorkspace(normalized.mode, {
+      config: normalized,
+      settingsReady: true,
+      positioningTouched: true,
+    })
   }
 
   function setImagesForMode(targetMode: ProjectMode, updater: (current: Record<string, string>) => Record<string, string>): Record<string, string> {
@@ -915,14 +933,10 @@ export default function App() {
     setError('已停止生成')
   }
 
-  function settingsLabel() {
-    return mode === 'taobao' ? '买家定位' : '定位'
-  }
-
   useEffect(() => {
     activeModeRef.current = mode
     workspaceRef.current[mode] = currentWorkspaceSnapshot()
-  }, [mode, topic, config, project, images, pageStatus, pageErrors, selectedPageId, referenceImage, referenceImageName, settingsReady])
+  }, [mode, topic, config, project, images, pageStatus, pageErrors, selectedPageId, referenceImage, referenceImageName, settingsReady, positioningTouched])
 
   useEffect(() => {
     if (!selectedPageId && project?.pages[0]) setSelectedPageId(project.pages[0].id)
@@ -1035,8 +1049,8 @@ export default function App() {
         topic: cleanTopic,
         config: nextConfig,
         settingsReady: true,
+        positioningTouched: false,
       })
-      setSettingsPromptAction(null)
       return true
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -1078,7 +1092,6 @@ export default function App() {
     workspaceRef.current[mode] = currentWorkspaceSnapshot()
     setStudioMode('single')
     setError('')
-    setSettingsPromptAction(null)
     setPageDraft(null)
     setPreviewPageId('')
     setAdjustPageId('')
@@ -1559,26 +1572,11 @@ export default function App() {
       setError('请输入选题')
       return
     }
-    if (!settingsReady || isDefaultPositioning(config)) {
-      setError('')
-      setSettingsPromptAction(action)
-      return
+    if (autoFillPositioning && !positioningTouched && (!settingsReady || isDefaultPositioning(config))) {
+      const filled = await fillSettings()
+      if (!filled) return
     }
-    await runGenerationAction(action)
-  }
-
-  async function autoFillAndContinue() {
-    const action = settingsPromptAction
-    if (!action || isGenerationLocked) return
-    const filled = await fillSettings()
-    if (filled) await runGenerationAction(action)
-  }
-
-  async function continueWithoutSettings() {
-    const action = settingsPromptAction
-    if (!action || isGenerationLocked) return
-    setSettingsPromptAction(null)
-    patchWorkspace(mode, { settingsReady: true })
+    if (!settingsReady) patchWorkspace(mode, { settingsReady: true })
     await runGenerationAction(action)
   }
 
@@ -1597,6 +1595,7 @@ export default function App() {
       referenceImage: '',
       referenceImageName: '',
       settingsReady: true,
+      positioningTouched: true,
     })
     void loadHistory(itemConfig.mode).then(setHistory)
   }
@@ -1658,7 +1657,6 @@ export default function App() {
     setPageDraft(null)
     setPreviewPageId('')
     setIsPreviewActualSize(false)
-    setSettingsPromptAction(null)
     setError('')
   }
 
@@ -2174,24 +2172,72 @@ export default function App() {
           )}
 
           <div className="auto-settings">
+            <div className="toggle-row positioning-toggle">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={autoFillPositioning}
+                  onChange={(event) => {
+                    setAutoFillPositioning(event.target.checked)
+                    setError('')
+                  }}
+                />
+                <span>{mode === 'taobao' ? '生成前自动填写买家定位' : '生成前自动填写定位'}</span>
+              </label>
+            </div>
+
             <button className="secondary-button full" type="button" onClick={() => void fillSettings()} disabled={isGenerationLocked}>
               {busy === 'settings' ? <Loader2 className="spin" size={18} /> : <WandSparkles size={18} />}
-              {mode === 'taobao' ? '自动填写买家定位' : '自动填写定位'}
+              {mode === 'taobao' ? '重新自动填写买家定位' : '重新自动填写定位'}
             </button>
-            <dl className="setting-summary">
-              <div>
-                <dt>领域</dt>
-                <dd>{config.field}</dd>
+
+            {autoFillPositioning ? (
+              <dl className="setting-summary">
+                <div>
+                  <dt>领域</dt>
+                  <dd>{config.field}</dd>
+                </div>
+                <div>
+                  <dt>风格</dt>
+                  <dd>{config.visualStyle}</dd>
+                </div>
+                <div>
+                  <dt>{mode === 'taobao' ? '买家' : '读者'}</dt>
+                  <dd>{config.audience}</dd>
+                </div>
+              </dl>
+            ) : (
+              <div className="positioning-editor">
+                <label className="field-block">
+                  <span>领域</span>
+                  <select
+                    value={config.field}
+                    onChange={(event) => updatePositioningConfig({ ...config, field: event.target.value as Field })}
+                  >
+                    {fields.map((item) => <option value={item} key={item}>{item}</option>)}
+                  </select>
+                </label>
+                <label className="field-block">
+                  <span>风格</span>
+                  <select
+                    value={config.visualStyle}
+                    onChange={(event) => updatePositioningConfig({ ...config, visualStyle: event.target.value as VisualStyle })}
+                  >
+                    {styles.map((item) => <option value={item} key={item}>{item}</option>)}
+                  </select>
+                </label>
+                <label className="field-block">
+                  <span>{mode === 'taobao' ? '买家定位' : '目标读者'}</span>
+                  <textarea
+                    className="compact-textarea"
+                    rows={3}
+                    value={config.audience}
+                    onChange={(event) => updatePositioningConfig({ ...config, audience: event.target.value })}
+                    placeholder={mode === 'taobao' ? TAOBAO_DEFAULT_AUDIENCE : XHS_DEFAULT_AUDIENCE}
+                  />
+                </label>
               </div>
-              <div>
-                <dt>风格</dt>
-                <dd>{config.visualStyle}</dd>
-              </div>
-              <div>
-                <dt>{mode === 'taobao' ? '买家' : '读者'}</dt>
-                <dd>{config.audience}</dd>
-              </div>
-            </dl>
+            )}
           </div>
 
           <div className="range-row">
@@ -2217,21 +2263,6 @@ export default function App() {
               <span>{mode === 'taobao' ? '整套保持商品一致' : '整套保持同一风格'}</span>
             </label>
           </div>
-
-          {settingsPromptAction && (
-            <div className="settings-reminder" role="alert">
-              <p>当前还是默认{settingsLabel()}。建议先自动填写，再生成。</p>
-              <div>
-                <button type="button" onClick={() => void autoFillAndContinue()} disabled={isGenerationLocked}>
-                  {busy === 'settings' ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
-                  自动填写并继续
-                </button>
-                <button type="button" onClick={() => void continueWithoutSettings()} disabled={isGenerationLocked}>
-                  继续生成
-                </button>
-              </div>
-            </div>
-          )}
 
           {error && <div className="error-box" role="alert">{error}</div>}
 

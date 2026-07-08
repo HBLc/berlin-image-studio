@@ -17,7 +17,7 @@ Berlin Image Studio 是一个本地运行的 AI 图片工作台，用 `gpt-image
 - 淘宝宣传图模式：根据商品或活动生成主图、卖点图、场景图和收口图。
 - 单图生成模式：参考 `gpt_image_playground` 的单图工作流，支持提示词、参考图、结果画廊、放大预览、调整和下载。
 - 文生图比赛模式：输入比赛要求，可指定一次生成 1 到 10 张风格一致、内容关联的参赛系列图。
-- 自动填写定位：可由文本模型自动补全领域、视觉风格和目标读者/买家。
+- 自动填写定位：默认在生成前自动补全领域、视觉风格和目标读者/买家，也可关闭后手动编辑。
 - 页面内容编辑：每一页的标题、要点、画面说明和图片提示词都可修改后保存。
 - 图片生成：使用 `images/generations` 生成单页图片。
 - 图片调整：已有图片可输入调整需求，使用 `images/edits` 基于原图修改。
@@ -246,7 +246,7 @@ This project is a fresh implementation. It does not copy source code or prompt f
 - Taobao mode: generate product hero images, selling-point images, scenario images, and closing promotion images.
 - Single-image mode: a standalone workflow inspired by `gpt_image_playground`, with prompts, optional reference images, a result gallery, large preview, editing, and download.
 - Competition mode for text-to-image: enter competition requirements and generate 1 to 10 connected images with one consistent visual system.
-- Auto positioning: use a text model to suggest field, visual style, and target reader/buyer.
+- Auto positioning: enabled by default before generation, with manual editing available when disabled.
 - Editable pages: update headline, bullets, visual brief, and image prompt before generation.
 - Image generation: generate one selected page through `images/generations`.
 - Image editing: adjust an existing image through `images/edits` with a custom instruction.
